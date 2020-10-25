@@ -1,13 +1,11 @@
-#include "util/result.h"
 #include "util/executor.h"
-#include "util/serial.h"
-#include "util/hex_byte.h"
-
+#include "util/net.h"
+#include "util/result.h"
 
 #include <chrono>
 #include <iostream>
 #include <random>
-#include <vector>
+#include <sstream>
 
 using std::chrono_literals::operator""ms;
 
@@ -19,7 +17,7 @@ util::result<int> risky() {
   if (success) {
     return std::uniform_int_distribution(1, 100)(generator);
   } else {
-    return util::internal_error("a bad did a happening :(");
+    return util::transient_error("a bad did a happening :(");
   }
 }
 
@@ -48,13 +46,87 @@ void make_attempt(util::executor& executor, int& attempts) {
   }
 }
 
-int main() {
-  std::cout << "int -123456 ";
-  util::encoder enc(std::cout);
-  enc.encode(123456);
- 
+struct connection {
+  static void spawn(util::stream client) {
+    auto c = std::make_shared<connection>(std::move(client));
+    c->make_attempt(c);
+  }
+
+  connection(util::stream client) : client(std::move(client)) {}
+
+  void make_attempt(std::shared_ptr<connection> self) {
+    attempts++;
+    if (auto result = risky(); result.success()) {
+      std::ostringstream output;
+      output << "You win on the " << nth{attempts} << " attempt with "
+             << *result << " points!\n";
+      message = output.str();
+      client.write(message, [self](util::status s) {
+        if (s.failure()) {
+          std::cerr << s << '\n';
+        } else {
+          self->done(self);
+        }
+      });
+    } else {
+      std::ostringstream output;
+      output << "Blast, failed the " << nth{attempts}
+             << " attempt! Trying again...\n";
+      message = output.str();
+      client.write(message, [self](util::status s) {
+        if (s.failure()) {
+          std::cerr << s << '\n';
+        } else {
+          self->client.context().schedule_in(
+              100ms, [self] { self->make_attempt(self); });
+        }
+      });
+    }
+  }
+
+  void done(std::shared_ptr<connection>) {
+    std::cout << "Done!\n";
+  }
+
+  util::stream client;
+  std::string message;
   int attempts = 0;
-  util::serial_executor executor;
-  make_attempt(executor, attempts);
-  executor.run();
+};
+
+struct server {
+  static void spawn(util::io_context& context) {
+    util::result<util::acceptor> acceptor =
+        util::bind(context, {"0.0.0.0", 17994});
+    if (acceptor.failure()) {
+      std::cerr << acceptor.status() << '\n';
+      return;
+    }
+    auto s = std::make_shared<server>(std::move(*acceptor));
+    s->do_accept(s);
+  }
+  server(util::acceptor acceptor) : acceptor(std::move(acceptor)) {}
+  void do_accept(std::shared_ptr<server> self) {
+    acceptor.accept([self](util::result<util::stream> client) {
+      if (client.failure()) {
+        std::cerr << client.status() << '\n';
+      } else {
+        connection::spawn(std::move(*client));
+        self->do_accept(self);
+      }
+    });
+  }
+
+  util::acceptor acceptor;
+};
+
+int main() {
+  util::result<util::io_context> context = util::io_context::create();
+  if (context.failure()) {
+    std::cerr << context.status() << '\n';
+    return 1;
+  }
+  server::spawn(*context);
+  if (util::status s = context->run(); s.failure()) {
+    std::cerr << s << '\n';
+  }
 }

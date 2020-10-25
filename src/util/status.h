@@ -8,10 +8,12 @@ namespace util {
 
 // All status objects can decay to a canonical code from this selection.
 enum class status_code : int {
-  ok,
-  client_error,
-  internal_error,
-  unknown_error,
+  ok,               // success!
+  client_error,     // client error, e.g. misuse of an API.
+  transient_error,  // temporary failure, client may retry.
+  permanent_error,  // permanant failure, client should not retry.
+  not_available,    // requested functionality is not available.
+  unknown_error,    // an unknown error condition.
 };
 
 // A status stores a payload and an unowned pointer to a manager. The manager
@@ -112,10 +114,17 @@ class [[nodiscard]] error : public status {
 
 // Helper functions for constructing errors with messages.
 error client_error(std::string message) noexcept;
-error internal_error(std::string message) noexcept;
+error transient_error(std::string message) noexcept;
+error permanent_error(std::string message) noexcept;
+error not_available(std::string message) noexcept;
 error unknown_error(std::string message) noexcept;
 
+// Build a status object from a posix error code. 0 represents success.
 status posix_status(int code) noexcept;
 status posix_status(int code, std::string message) noexcept;
+
+// Like posix_status except that the result is always a failure status.
+error posix_error(int code) noexcept;
+error posix_error(int code, std::string message) noexcept;
 
 }  // namespace util

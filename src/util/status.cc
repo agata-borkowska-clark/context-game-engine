@@ -15,7 +15,9 @@ struct status_code_manager_base : status_manager {
     switch (status_code{code(payload)}) {
       case status_code::ok: return "ok";
       case status_code::client_error: return "client_error";
-      case status_code::internal_error: return "internal_error";
+      case status_code::transient_error: return "transient_error";
+      case status_code::permanent_error: return "permanent_error";
+      case status_code::not_available: return "not_available";
       case status_code::unknown_error: return "unknown_error";
     }
     return "<invalid>";
@@ -256,12 +258,38 @@ error client_error(std::string message) noexcept {
   return error{status(status_code::client_error, std::move(message))};
 }
 
-error internal_error(std::string message) noexcept {
-  return error{status(status_code::internal_error, std::move(message))};
+error transient_error(std::string message) noexcept {
+  return error{status(status_code::transient_error, std::move(message))};
+}
+
+error permanent_error(std::string message) noexcept {
+  return error{status(status_code::permanent_error, std::move(message))};
+}
+
+error not_available(std::string message) noexcept {
+  return error{status(status_code::not_available, std::move(message))};
 }
 
 error unknown_error(std::string message) noexcept {
   return error{status(status_code::unknown_error, std::move(message))};
+}
+
+status posix_status(int code) noexcept {
+  status_payload payload;
+  payload.code = code;
+  return status(posix_manager, payload);
+}
+
+status posix_status(int code, std::string message) noexcept {
+  status_payload payload;
+  payload.pointer = new payload_type{code, std::move(message)};
+  return status(posix_payload_manager, payload);
+}
+
+error posix_error(int code) noexcept { return error{posix_status(code)}; }
+
+error posix_error(int code, std::string message) noexcept {
+  return error{posix_status(code, std::move(message))};
 }
 
 }  // namespace util

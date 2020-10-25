@@ -2,7 +2,7 @@
 
 namespace util {
 
-void encoder::encode(unsigned int t) {
+/*void encoder::encode(unsigned int t) {
   static_assert(sizeof(t) == 4);
   out_stream << static_cast<unsigned char>(t >> 24);
   out_stream << static_cast<unsigned char>(t >> 16);
@@ -17,6 +17,10 @@ void encoder::encode(int t) {
 
 void encoder::encode(char t) {
   out_stream << t;
+}*/
+
+encoder<char> operator() (char& value) const noexcept {
+  *out_stream_ << value;
 }
 
 }  // namespace util

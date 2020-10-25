@@ -1,3 +1,6 @@
+# ignore all directiories starting with . except .gitignore
 .*
 !.gitignore
+
+# ignore the build dir
 /build

@@ -1,9 +1,13 @@
 #include "util/result.h"
 #include "util/executor.h"
+#include "util/serial.h"
+#include "util/hex_byte.h"
+
 
 #include <chrono>
 #include <iostream>
 #include <random>
+#include <vector>
 
 using std::chrono_literals::operator""ms;
 
@@ -45,6 +49,10 @@ void make_attempt(util::executor& executor, int& attempts) {
 }
 
 int main() {
+  std::cout << "int -123456 ";
+  util::encoder enc(std::cout);
+  enc.encode(123456);
+ 
   int attempts = 0;
   util::serial_executor executor;
   make_attempt(executor, attempts);

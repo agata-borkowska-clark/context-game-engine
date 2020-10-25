@@ -189,7 +189,7 @@ status& status::operator=(status&& other) noexcept {
   manager_->destroy(payload_);
   payload_ = other.payload_;
   manager_ = other.manager_;
-  other.payload_ = {.code = (int)manager_->canonical(payload_)};
+  other.payload_.code = (int)manager_->canonical(payload_);
   other.manager_ = &status_code_manager;
   return *this;
 }

@@ -124,7 +124,8 @@ class [[nodiscard]] status {
   // Compare two status objects for equality. If the two statuses have the same
   // domain, the comparison is exact. Otherwise, the comparison decays to
   // comparing the canonical codes.
-  friend bool operator==(const status& l, const status& r);
+  friend bool operator==(const status& l, const status& r) noexcept;
+  friend bool operator!=(const status& l, const status& r) noexcept;
 
  private:
   friend class error;

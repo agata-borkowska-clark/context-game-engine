@@ -298,13 +298,15 @@ std::ostream& operator<<(std::ostream& output, const status& s) {
   return output;
 }
 
-bool operator==(const status& l, const status& r) {
+bool operator==(const status& l, const status& r) noexcept {
   if (*l.manager_ == *r.manager_) {
     return l.code() == r.code();
   } else {
     return l.canonical() == r.canonical();
   }
 }
+
+bool operator!=(const status& l, const status& r) noexcept { return !(l == r); }
 
 static status expect_error(status s) {
   assert(s.failure());

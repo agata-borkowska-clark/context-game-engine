@@ -10,6 +10,9 @@ enum http_status : int {
   ok = 200,
 };
 
+status make_status(http_status) noexcept;
+status make_status(http_status, std::string) noexcept;
+
 class http_server {
  public:
   // Equivalent to constructing a http_server and calling init().

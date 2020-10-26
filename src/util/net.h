@@ -126,6 +126,8 @@ class socket {
   io_context& context() const noexcept;
   io_state& state() const noexcept;
 
+  status shutdown() const noexcept;
+
  private:
   socket(io_context&, unique_handle, std::unique_ptr<io_state>) noexcept;
 

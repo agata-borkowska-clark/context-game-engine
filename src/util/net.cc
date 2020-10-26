@@ -190,10 +190,6 @@ unique_handle::operator bool() const noexcept {
 
 status unique_handle::close() noexcept {
   if (handle_ == file_handle::none) return status_code::ok;
-  if (::shutdown((int)handle_, SHUT_RDWR) == -1) {
-    return status(posix_code{errno},
-                  "from shutdown() in unique_handle::close()");
-  }
   if (::close((int)handle_) == -1) {
     return status(posix_code{errno}, "from close() in unique_handle::close()");
   }
@@ -330,13 +326,27 @@ status socket::init(io_context& context, unique_handle handle) noexcept {
 }
 
 socket::~socket() noexcept {
-  if (handle_) must(context_->unregister_handle(handle_.get()));
+  if (handle_) {
+    must(context_->unregister_handle(handle_.get()));
+    if (status s = shutdown();
+        s.failure() && s != status{posix_code{std::errc::not_connected}}) {
+      must(s);
+    }
+  }
 }
 
 socket::operator bool() const noexcept { return (bool)handle_; }
 file_handle socket::handle() const noexcept { return handle_.get(); }
 io_context& socket::context() const noexcept { return *context_; }
 io_state& socket::state() const noexcept { return *state_; }
+
+status socket::shutdown() const noexcept {
+  if (::shutdown((int)handle_.get(), SHUT_RDWR) == -1) {
+    return status(posix_code{errno}, "in socket::shutdown()");
+  } else {
+    return status_code::ok;
+  }
+}
 
 socket::socket(io_context& context, unique_handle handle,
                std::unique_ptr<io_state> state) noexcept

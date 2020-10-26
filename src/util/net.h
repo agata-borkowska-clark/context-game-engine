@@ -35,8 +35,8 @@ class unique_handle {
   file_handle handle_;
 };
 
-class socket;
-
+// State for pending IO operations in an IO context. See the functions in
+// io_context for more information.
 struct io_state {
   using task = executor::task;
   file_handle handle;
@@ -46,19 +46,30 @@ struct io_state {
 
 class io_context : public executor {
  public:
+  // Create a new io_context or return an error explaining why one could not be
+  // made.
   static result<io_context> create() noexcept;
+
+  // Schedule a task to run in this context.
   void schedule_at(time_point, task) noexcept override;
+
+  // Run work in this io_context.
   status run();
 
+  // IO state is maintained in io_state objects. Before any IO can be performed
+  // for a file handle, an io_state must be registered. Once IO for a file
+  // handle is complete, it must be unregistered.
   status register_handle(io_state& state) noexcept;
   status unregister_handle(file_handle handle) noexcept;
 
+  // Await an operation on this file stream. The state must have been registered
+  // before these functions are called. The provided task will be scheduled as
+  // soon as the file handle is ready to perform the corresponding operation, so
+  // this can be used to schedule a read()/accept()/write() call for later.
   status await_in(io_state& state, io_state::task) noexcept;
   status await_out(io_state& state, io_state::task) noexcept;
 
  private:
-  friend class socket;
-
   struct work_item {
     time_point time;
     task resume;
@@ -77,12 +88,13 @@ struct address {
 
 std::ostream& operator<<(std::ostream&, const address&);
 
+// Base socket class for raw sockets. This class does not expose any of the
+// socket functionality: for that you want acceptor or stream from below.
 class socket {
  public:
   static result<socket> create(io_context& context,
                                unique_handle handle) noexcept;
-  socket(io_context&) noexcept;
-  socket(io_context&, unique_handle, std::unique_ptr<io_state>) noexcept;
+  socket() noexcept;
   ~socket() noexcept;
 
   // Not copyable.
@@ -93,6 +105,7 @@ class socket {
   socket(socket&& other) noexcept = default;
   socket& operator=(socket&& other) noexcept = default;
 
+  // Check if the socket is initialised (non-empty).
   explicit operator bool() const noexcept;
   file_handle handle() const noexcept;
 
@@ -102,11 +115,14 @@ class socket {
   io_state& state() const noexcept;
 
  private:
+  socket(io_context&, unique_handle, std::unique_ptr<io_state>) noexcept;
+
   io_context* context_;
   unique_handle handle_;
   std::unique_ptr<io_state> state_;
 };
 
+// A TCP socket, supporting sequential reads and writes.
 class stream {
  public:
   stream(socket socket) noexcept;
@@ -132,6 +148,9 @@ class stream {
   void write(span<const char> buffer,
              std::function<void(status)> done) noexcept;
 
+  // Check if the socket is initialised (non-empty).
+  explicit operator bool() const noexcept;
+
   // Access the context and state for this socket. Only valid if the socket
   // object is non-empty.
   io_context& context() const noexcept;
@@ -140,6 +159,7 @@ class stream {
   socket socket_;
 };
 
+// A TCP server, accepting TCP sockets.
 class acceptor {
  public:
   static constexpr int max_pending_connections = 8;
@@ -151,6 +171,9 @@ class acceptor {
   // wrong.
   void accept(std::function<void(result<stream>)> done) noexcept;
 
+  // Check if the socket is initialised (non-empty).
+  explicit operator bool() const noexcept;
+
   // Access the context and state for this socket. Only valid if the socket
   // object is non-empty.
   io_context& context() const noexcept;
@@ -159,7 +182,10 @@ class acceptor {
   socket socket_;
 };
 
+// Host: bind an acceptor to the given address.
 result<acceptor> bind(io_context&, const address&);
+
+// Client: connect a stream to the given address.
 result<stream> connect(io_context&, const address&);
 
 }  // namespace util

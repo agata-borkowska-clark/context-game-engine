@@ -21,6 +21,8 @@ constexpr auto by_time = [](auto& l, auto& r) {
 
 void must(const status& status) {
 #ifndef NDEBUG
+  // In debug builds only, crash the application if the given operation does not
+  // succeed.
   if (!status.success()) {
     std::cerr << status << '\n';
     std::abort();
@@ -28,6 +30,8 @@ void must(const status& status) {
 #endif
 }
 
+// Shared implementation for await_in and await_out: register interest for an IO
+// operation in the epoll instance.
 template <io_state::task io_state::*op>
 status await_op(file_handle epoll, io_state& state,
                 io_state::task resume) noexcept {
@@ -83,8 +87,10 @@ struct gai_code_manager : status_manager {
 };
 static constexpr gai_code_manager gai_code_manager;
 
+// Build an error object from a get_address_info error code.
 error gai_error(int code) {
   if (code == EAI_SYSTEM) {
+    // When the code is EAI_SYSTEM, the more detailed error is in errno.
     return posix_error(errno);
   } else {
     status_payload payload;
@@ -93,6 +99,7 @@ error gai_error(int code) {
   }
 }
 
+// Retrieve the address for a socket.
 template <auto get_socket_address>
 result<address> get_address(const socket& socket) noexcept {
   // Retrieve the socket address information.
@@ -111,8 +118,10 @@ result<address> get_address(const socket& socket) noexcept {
   return address{host, static_cast<std::uint16_t>(std::atoi(decimal_port))};
 }
 
+// RAII wrapper for addrinfo objects.
 class addr_info {
  public:
+  // Resolve an address into an addrinfo list.
   static result<addr_info> resolve(const char* address,
                                    const char* service) noexcept {
     addrinfo* info;
@@ -146,6 +155,7 @@ class addr_info {
   addrinfo* value_;
 };
 
+// Change a file handle to non-blocking mode.
 status set_non_blocking(socket& socket) {
   int flags = fcntl((int)socket.handle(), F_GETFL);
   if (flags == -1) return posix_error(errno);
@@ -212,6 +222,8 @@ void io_context::schedule_at(time_point time, task f) noexcept {
 }
 
 status io_context::run() {
+  // TODO: Find a neat way of tracking how many pending IO operations the
+  // context has and use this to allow run() to return when all work finishes.
   while (true) {
     // Run all work that should have triggered by now.
     const time_point now = clock::now();
@@ -291,7 +303,7 @@ std::ostream& operator<<(std::ostream& output, const address& a) {
 
 result<socket> socket::create(io_context& context,
                               unique_handle handle) noexcept {
-  if (!handle) return result<socket>(socket(context));
+  if (!handle) return result<socket>(socket());
   auto state = std::make_unique<io_state>();
   state->handle = handle.get();
   if (status s = context.register_handle(*state); !s.success()) {
@@ -300,13 +312,7 @@ result<socket> socket::create(io_context& context,
   return socket(context, std::move(handle), std::move(state));
 }
 
-socket::socket(io_context& context) noexcept : context_(&context) {}
-
-socket::socket(io_context& context, unique_handle handle,
-               std::unique_ptr<io_state> state) noexcept
-    : context_(&context),
-      handle_(std::move(handle)),
-      state_(std::move(state)) {}
+socket::socket() noexcept {}
 
 socket::~socket() noexcept {
   if (handle_) must(context_->unregister_handle(handle_.get()));
@@ -316,6 +322,12 @@ socket::operator bool() const noexcept { return (bool)handle_; }
 file_handle socket::handle() const noexcept { return handle_.get(); }
 io_context& socket::context() const noexcept { return *context_; }
 io_state& socket::state() const noexcept { return *state_; }
+
+socket::socket(io_context& context, unique_handle handle,
+               std::unique_ptr<io_state> state) noexcept
+    : context_(&context),
+      handle_(std::move(handle)),
+      state_(std::move(state)) {}
 
 stream::stream(socket socket) noexcept
     : socket_(std::move(socket)) {}
@@ -339,6 +351,7 @@ void stream::read_some(span<char> buffer,
 
 void stream::read(span<char> buffer,
                   std::function<void(result<span<char>>)> done) noexcept {
+  // read is composed of a sequence of read_some calls.
   struct reader {
     stream* input;
     span<char> buffer;
@@ -383,6 +396,7 @@ void stream::write_some(
 
 void stream::write(span<const char> buffer,
                    std::function<void(status)> done) noexcept {
+  // write is composed of a sequence of write_some calls.
   struct writer {
     stream* output;
     span<const char> remaining;
@@ -406,6 +420,7 @@ void stream::write(span<const char> buffer,
   writer{this, buffer, std::move(done)}.run();
 }
 
+stream::operator bool() const noexcept { return (bool)socket_; }
 io_context& stream::context() const noexcept { return socket_.context(); }
 
 acceptor::acceptor(socket socket) noexcept : socket_(std::move(socket)) {}
@@ -432,22 +447,30 @@ void acceptor::accept(std::function<void(result<stream>)> done) noexcept {
   }
 }
 
+acceptor::operator bool() const noexcept { return (bool)socket_; }
 io_context& acceptor::context() const noexcept { return socket_.context(); }
 
 result<acceptor> bind(io_context& context, const address& address) {
+  // Resolve the address which we intend to bind to.
   result<addr_info> info = addr_info::resolve(
       address.host.c_str(), std::to_string(address.port).c_str());
   if (info.failure()) return error{std::move(info).status()};
+  // Create a socket in the right address family (e.g. IPv4 or IPv6).
   result<socket> socket =
       socket::create(context, unique_handle{file_handle{::socket(
                                   info->get()->ai_family, SOCK_STREAM, 0)}});
   if (socket.failure()) return error{std::move(socket).status()};
+  // Switch the socket to non-blocking mode. This way if we try to perform any
+  // blocking operation before it is ready it will fail immediately instead of
+  // blocking.
   if (status s = set_non_blocking(*socket); s.failure()) {
     return error{std::move(s)};
   }
+  // Bind to the address.
   const int bind_result = ::bind((int)socket->handle(), info->get()->ai_addr,
                                  info->get()->ai_addrlen);
   if (bind_result == -1) return posix_error(errno);
+  // Start listening for incoming connections.
   const int listen_result =
       ::listen((int)socket->handle(), acceptor::max_pending_connections);
   if (listen_result == -1) return posix_error(errno);
@@ -455,16 +478,22 @@ result<acceptor> bind(io_context& context, const address& address) {
 }
 
 result<stream> connect(io_context& context, const address& address) {
+  // Resolve the address which we want to connect to.
   result<addr_info> info = addr_info::resolve(
       address.host.c_str(), std::to_string(address.port).c_str());
   if (info.failure()) return error{std::move(info).status()};
+  // Create a socket in the right address family (e.g. IPv4 or IPv6).
   result<socket> socket =
       socket::create(context, unique_handle{file_handle{::socket(
                                   info->get()->ai_family, SOCK_STREAM, 0)}});
   if (socket.failure()) return error{std::move(socket).status()};
+  // Switch the socket to non-blocking mode. This way if we try to perform any
+  // blocking operation before it is ready it will fail immediately instead of
+  // blocking.
   if (status s = set_non_blocking(*socket); s.failure()) {
     return error{std::move(s)};
   }
+  // Connect to the address.
   const int connect_result = ::connect(
       (int)socket->handle(), info->get()->ai_addr, info->get()->ai_addrlen);
   if (connect_result == -1) return posix_error(errno);

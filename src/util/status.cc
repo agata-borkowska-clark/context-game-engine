@@ -1,5 +1,7 @@
 #include "status.h"
 
+#include "status_managers.h"
+
 namespace util {
 
 // Base status manager for canonical codes.
@@ -30,39 +32,10 @@ struct status_code_manager_base : status_manager {
   }
 };
 
-// Status manager for status objects that contain only a canonical code.
-struct status_code_manager final : status_code_manager_base {
-  constexpr int code(status_payload payload) const noexcept final{
-    return payload.code;
-  }
-  void output(std::ostream&, status_payload) const noexcept final {}
-  void destroy(status_payload) const noexcept final {}
-};
-static constexpr status_code_manager status_code_manager;
-
-struct payload_type {
-  int code;
-  std::string message;
-};
-
-// Status manager for status objects that contain a canonical code and
-// a message.
-struct payload_status_manager final : status_code_manager_base {
-  constexpr payload_type* payload(status_payload p) const noexcept {
-    return (payload_type*)p.pointer;
-  }
-  constexpr int code(status_payload p) const noexcept final {
-    return payload(p)->code;
-  }
-  void output(std::ostream& output,
-              status_payload p) const noexcept final {
-    output << ": " << payload(p)->message;
-  }
-  void destroy(status_payload p) const noexcept final {
-    delete payload(p);
-  }
-};
-static constexpr payload_status_manager payload_status_manager;
+// Status managers for canonical codes.
+static constexpr code_manager<status_code_manager_base> status_code_manager;
+static constexpr code_with_message_manager<status_code_manager_base>
+    payload_status_manager;
 
 struct exception_payload {
   const std::type_info& type;
@@ -133,34 +106,10 @@ struct posix_manager_base : status_manager {
   }
 };
 
-// Status manager for status objects that contain only a canonical code.
-struct posix_manager final : status_code_manager_base {
-  constexpr int code(status_payload payload) const noexcept final{
-    return payload.code;
-  }
-  void output(std::ostream&, status_payload) const noexcept final {}
-  void destroy(status_payload) const noexcept final {}
-};
-static constexpr posix_manager posix_manager;
-
-// Status manager for status objects that contain a canonical code and
-// a message.
-struct posix_payload_manager final : status_code_manager_base {
-  constexpr payload_type* payload(status_payload p) const noexcept {
-    return (payload_type*)p.pointer;
-  }
-  constexpr int code(status_payload p) const noexcept final {
-    return payload(p)->code;
-  }
-  void output(std::ostream& output,
-              status_payload p) const noexcept final {
-    output << ": " << payload(p)->message;
-  }
-  void destroy(status_payload p) const noexcept final {
-    delete payload(p);
-  }
-};
-static constexpr posix_payload_manager posix_payload_manager;
+// Status managers for posix codes.
+static constexpr code_manager<posix_manager_base> posix_manager;
+static constexpr code_with_message_manager<posix_manager_base>
+    posix_payload_manager;
 
 status::status() noexcept : status(status_code::ok) {}
 
@@ -173,7 +122,8 @@ status::status(const status_manager& manager, status_payload payload) noexcept
     : payload_(payload), manager_(&manager) {}
 
 status::status(status_code code, std::string message) {
-  payload_.pointer = new payload_type{(int)code, std::move(message)};
+  payload_.pointer =
+      new code_with_message_payload{(int)code, std::move(message)};
   manager_ = &payload_status_manager;
 }
 
@@ -282,7 +232,7 @@ status posix_status(int code) noexcept {
 
 status posix_status(int code, std::string message) noexcept {
   status_payload payload;
-  payload.pointer = new payload_type{code, std::move(message)};
+  payload.pointer = new code_with_message_payload{code, std::move(message)};
   return status(posix_payload_manager, payload);
 }
 

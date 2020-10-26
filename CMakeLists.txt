@@ -6,7 +6,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_library(util src/util/executor.cc src/util/net.cc src/util/result.cc src/util/serial.cc src/util/status.cc)
+file(GLOB util_sources src/util/*.cc)
+add_library(util ${util_sources})
 
 add_executable(engine src/engine.cc)
 target_link_libraries(engine util)

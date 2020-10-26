@@ -6,6 +6,12 @@ namespace util {
 
 template <typename Base>
 struct code_manager final : public Base {
+  template <typename T>
+  status make(T code) const noexcept {
+    status_payload payload;
+    payload.code = (int)code;
+    return status(*this, payload);
+  }
   constexpr int code(status_payload payload) const noexcept final {
     return payload.code;
   }
@@ -20,6 +26,13 @@ struct code_with_message_payload {
 
 template <typename Base>
 struct code_with_message_manager : public Base {
+  template <typename T>
+  status make(T code, std::string message) const noexcept {
+    status_payload payload;
+    payload.pointer =
+        new code_with_message_payload{(int)code, std::move(message)};
+    return status(*this, payload);
+  }
   constexpr code_with_message_payload* payload(
       status_payload p) const noexcept {
     return static_cast<code_with_message_payload*>(p.pointer);

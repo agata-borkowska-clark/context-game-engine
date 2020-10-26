@@ -41,7 +41,7 @@ status await_op(file_handle epoll, io_state& state,
                  (state.do_out ? EPOLLOUT : 0);
   event.data.ptr = &state;
   if (epoll_ctl((int)epoll, EPOLL_CTL_MOD, (int)state.handle, &event) == -1) {
-    return posix_status(errno);
+    return posix_code{errno};
   } else {
     return status_code::ok;
   }
@@ -91,7 +91,7 @@ static constexpr gai_code_manager gai_code_manager;
 error gai_error(int code) {
   if (code == EAI_SYSTEM) {
     // When the code is EAI_SYSTEM, the more detailed error is in errno.
-    return posix_error(errno);
+    return error{posix_code{errno}};
   } else {
     status_payload payload;
     payload.code = code;
@@ -108,7 +108,7 @@ result<address> get_address(const socket& socket) noexcept {
   socklen_t size = sizeof(raw_storage);
   if (get_socket_address((int)socket.handle(), storage, &size) == -1) {
     if (errno == ENOTCONN) return {};
-    return posix_error(errno);
+    return error{posix_code{errno}};
   }
   // Convert the address into human-readable host and port strings.
   char host[1024], decimal_port[8];
@@ -158,9 +158,9 @@ class addr_info {
 // Change a file handle to non-blocking mode.
 status set_non_blocking(socket& socket) {
   int flags = fcntl((int)socket.handle(), F_GETFL);
-  if (flags == -1) return posix_error(errno);
+  if (flags == -1) return posix_code{errno};
   if (fcntl((int)socket.handle(), F_SETFL, flags | O_NONBLOCK) == -1) {
-    return posix_error(errno);
+    return posix_code{errno};
   }
   return status_code::ok;
 }
@@ -191,10 +191,11 @@ unique_handle::operator bool() const noexcept {
 status unique_handle::close() noexcept {
   if (handle_ == file_handle::none) return status_code::ok;
   if (::shutdown((int)handle_, SHUT_RDWR) == -1) {
-    return posix_status(errno, "from shutdown() in unique_handle::close()");
+    return status(posix_code{errno},
+                  "from shutdown() in unique_handle::close()");
   }
   if (::close((int)handle_) == -1) {
-    return posix_status(errno, "from close() in unique_handle::close()");
+    return status(posix_code{errno}, "from close() in unique_handle::close()");
   }
   return status_code::ok;
 }
@@ -211,7 +212,7 @@ status io_context::init() noexcept {
   epoll_ = unique_handle{file_handle{epoll_create(/*unused size*/42)}};
   if (!epoll_) {
     return error{
-        posix_status(errno, "from epoll_create in io_context::create()")};
+        status(posix_code{errno}, "from epoll_create in io_context::create()")};
   }
   return status_code::ok;
 }
@@ -243,7 +244,8 @@ status io_context::run() {
     const int num_events =
         epoll_wait((int)epoll_.get(), events.data(), events.size(), timeout_ms);
     if (num_events == -1 && errno != EINTR) {
-      return error{posix_status(errno, "from epoll_wait in io_context::run()")};
+      return error{
+          status(posix_code{errno}, "from epoll_wait in io_context::run()")};
     }
     for (int i = 0; i < num_events; i++) {
       auto& state = *static_cast<io_state*>(events[i].data.ptr);
@@ -267,7 +269,7 @@ status io_context::run() {
         if (epoll_ctl((int)epoll_.get(), EPOLL_CTL_MOD, (int)state.handle,
                       &events[i]) == -1) {
           return error{
-              posix_status(errno, "from epoll_ctl in io_context::run()")};
+              status(posix_code{errno}, "from epoll_ctl in io_context::run()")};
         }
       }
     }
@@ -280,14 +282,14 @@ status io_context::register_handle(io_state& state) noexcept {
   event.data.ptr = &state;
   if (epoll_ctl((int)epoll_.get(), EPOLL_CTL_ADD, (int)state.handle, &event) ==
       -1) {
-    return posix_status(errno, "in io_context::register_handle()");
+    return status(posix_code{errno}, "in io_context::register_handle()");
   }
   return status_code::ok;
 }
 
 status io_context::unregister_handle(file_handle handle) noexcept {
   if (epoll_ctl((int)epoll_.get(), EPOLL_CTL_DEL, (int)handle, nullptr) == -1) {
-    return posix_status(errno, "in io_context::unregister_handle()");
+    return status(posix_code{errno}, "in io_context::unregister_handle()");
   }
   return status_code::ok;
 }
@@ -354,7 +356,7 @@ void stream::read_some(span<char> buffer,
     if (result != -1) {
       done(buffer.subspan(0, result));
     } else {
-      done(error{posix_status(errno)});
+      done(error{posix_code{errno}});
     }
   };
   if (status s = socket_.context().await_in(state, std::move(handler));
@@ -399,7 +401,7 @@ void stream::write_some(
     if (result != -1) {
       done(buffer.subspan(result));
     } else {
-      done(error{posix_status(errno)});
+      done(error{posix_code{errno}});
     }
   };
   if (status s = socket_.context().await_out(state, std::move(handler));
@@ -445,7 +447,7 @@ void acceptor::accept(std::function<void(result<stream>)> done) noexcept {
   auto handler = [&context = socket_.context(), &state, done] {
     int handle = ::accept4((int)state.handle, nullptr, nullptr, SOCK_NONBLOCK);
     if (handle == -1) {
-      done(error{posix_status(errno)});
+      done(error{posix_code{errno}});
       return;
     }
     result<socket> s =
@@ -484,11 +486,11 @@ result<acceptor> bind(io_context& context, const address& address) {
   // Bind to the address.
   const int bind_result = ::bind((int)socket->handle(), info->get()->ai_addr,
                                  info->get()->ai_addrlen);
-  if (bind_result == -1) return posix_error(errno);
+  if (bind_result == -1) return error{posix_code{errno}};
   // Start listening for incoming connections.
   const int listen_result =
       ::listen((int)socket->handle(), acceptor::max_pending_connections);
-  if (listen_result == -1) return posix_error(errno);
+  if (listen_result == -1) return error{posix_code{errno}};
   return acceptor{std::move(*socket)};
 }
 
@@ -511,7 +513,7 @@ result<stream> connect(io_context& context, const address& address) {
   // Connect to the address.
   const int connect_result = ::connect(
       (int)socket->handle(), info->get()->ai_addr, info->get()->ai_addrlen);
-  if (connect_result == -1) return posix_error(errno);
+  if (connect_result == -1) return error{posix_code{errno}};
   return stream{std::move(*socket)};
 }
 

@@ -113,19 +113,8 @@ static constexpr code_with_message_manager<posix_manager_base>
 
 status::status() noexcept : status(status_code::ok) {}
 
-status::status(status_code code) noexcept {
-  payload_.code = (int)code;
-  manager_ = &status_code_manager;
-}
-
 status::status(const status_manager& manager, status_payload payload) noexcept
     : payload_(payload), manager_(&manager) {}
-
-status::status(status_code code, std::string message) {
-  payload_.pointer =
-      new code_with_message_payload{(int)code, std::move(message)};
-  manager_ = &payload_status_manager;
-}
 
 status::~status() noexcept { manager_->destroy(payload_); }
 
@@ -204,6 +193,14 @@ bool error::failure() const noexcept {
   return true;
 }
 
+status make_status(status_code code) noexcept {
+  return status_code_manager.make(code);
+}
+
+status make_status(status_code code, std::string message) noexcept {
+  return payload_status_manager.make(code, std::move(message));
+}
+
 error client_error(std::string message) noexcept {
   return error{status(status_code::client_error, std::move(message))};
 }
@@ -222,6 +219,17 @@ error not_available(std::string message) noexcept {
 
 error unknown_error(std::string message) noexcept {
   return error{status(status_code::unknown_error, std::move(message))};
+}
+
+posix_code::posix_code(int code) noexcept : value(code) {}
+posix_code::posix_code(std::errc code) noexcept : value((int)code) {}
+
+status make_status(posix_code code) noexcept {
+  return posix_manager.make(code.value);
+}
+
+status make_status(posix_code code, std::string message) noexcept {
+  return posix_payload_manager.make(code.value, std::move(message));
 }
 
 status posix_status(int code) noexcept {
@@ -243,3 +251,11 @@ error posix_error(int code, std::string message) noexcept {
 }
 
 }  // namespace util
+
+util::status make_status(std::errc code) {
+  return util::posix_manager.make(code);
+}
+
+util::status make_status(std::errc code, std::string message) {
+  return util::posix_payload_manager.make(code, std::move(message));
+}

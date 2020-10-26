@@ -54,12 +54,46 @@ struct status_manager {
   }
 };
 
+template <typename T, typename = void>
+struct can_make_status {
+  static constexpr bool value = false;
+};
+
+template <typename T>
+struct can_make_status<T,
+                       std::void_t<decltype(make_status(std::declval<T>()))>> {
+  static constexpr bool value = true;
+};
+
+template <typename T, typename = void>
+struct can_make_status_with_message {
+  static constexpr bool value = false;
+};
+
+template <typename T>
+struct can_make_status_with_message<
+    T, std::void_t<decltype(
+           make_status(std::declval<T>(), std::declval<std::string>()))>> {
+  static constexpr bool value = true;
+};
+
 class [[nodiscard]] status {
  public:
   status() noexcept;
   status(const status_manager& manager, status_payload payload) noexcept;
-  status(status_code code) noexcept;
-  status(status_code code, std::string message);
+
+  // A status can be implicitly constructed from any type T for which
+  // make_status(T) exists.
+  template <typename T, typename = std::enable_if_t<can_make_status<T>::value>>
+  status(T&& code) noexcept : status(make_status(std::forward<T>(code))) {}
+
+  // A status with a message can be implicitly constructed from any type T for
+  // which make_status(T, std::string) exists.
+  template <typename T,
+            typename = std::enable_if_t<can_make_status_with_message<T>::value>>
+  status(T&& code, std::string message) noexcept
+      : status(make_status(std::forward<T>(code), std::move(message))) {}
+
   ~status() noexcept;
 
   // Not copyable.
@@ -99,6 +133,9 @@ class [[nodiscard]] status {
   const status_manager* manager_;
 };
 
+status make_status(status_code) noexcept;
+status make_status(status_code, std::string) noexcept;
+
 // An error is a status that always represents a failure. Success values should
 // never be assigned to error objects: in debug builds, this will cause an
 // assertion failure, while in production builds the success will be replaced
@@ -112,19 +149,20 @@ class [[nodiscard]] error : public status {
   bool failure() const noexcept;
 };
 
+struct posix_code {
+  posix_code(int code) noexcept;
+  posix_code(std::errc code) noexcept;
+  int value;
+};
+
+status make_status(posix_code) noexcept;
+status make_status(posix_code, std::string message) noexcept;
+
 // Helper functions for constructing errors with messages.
 error client_error(std::string message) noexcept;
 error transient_error(std::string message) noexcept;
 error permanent_error(std::string message) noexcept;
 error not_available(std::string message) noexcept;
 error unknown_error(std::string message) noexcept;
-
-// Build a status object from a posix error code. 0 represents success.
-status posix_status(int code) noexcept;
-status posix_status(int code, std::string message) noexcept;
-
-// Like posix_status except that the result is always a failure status.
-error posix_error(int code) noexcept;
-error posix_error(int code, std::string message) noexcept;
 
 }  // namespace util

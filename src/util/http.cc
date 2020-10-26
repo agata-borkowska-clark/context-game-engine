@@ -8,6 +8,8 @@
 namespace util {
 namespace {
 
+using handler_map = std::map<std::string, http_server::handler>;
+
 struct http_status_manager_base : status_manager {
   constexpr std::uint64_t domain_id() const noexcept final {
     return 0x36'59'86'42'5c'5a'8b'53;
@@ -22,6 +24,8 @@ struct http_status_manager_base : status_manager {
         return "ok";
       case http_status::bad_request:
         return "bad_request";
+      case http_status::not_found:
+        return "not_found";
       case http_status::payload_too_large:
         return "payload_too_large";
       case http_status::request_header_fields_too_large:
@@ -125,28 +129,6 @@ void read_request_header(
     }
   };
   reader{client, buffer, std::move(done)}.read();
-}
-
-struct uri {
-  std::string scheme;
-  std::string authority;
-  std::string path;
-  std::string query;
-  std::string fragment;
-};
-
-result<uri> parse_uri(std::string_view input) noexcept {
-  // TODO: Determine if std::regex is good enough. If not, replace this with
-  // a hand-coded implementation.
-  static const std::regex pattern(
-      R"(^(([^:/?#]+):)?(//([^/?#]*))?([^?#]*)(\?([^#]*))?(#(.*))?)",
-      std::regex_constants::optimize | std::regex_constants::extended);
-  std::cmatch match;
-  if (!std::regex_match(input.data(), input.data() + input.size(), match,
-                        pattern)) {
-    return error{status(http_status::bad_request, "cannot parse URI")};
-  }
-  return uri{match[2], match[4], match[5], match[7], match[9]};
 }
 
 struct request_line {
@@ -268,7 +250,7 @@ struct request : request_line {
 };
 
 void read_request(stream& client, span<char> buffer,
-                  std::function<void(result<request>)> done) noexcept {
+                  std::function<void(result<http_request>)> done) noexcept {
   read_request_header(
       client, buffer,
       [&client, buffer, done = std::move(done)](result<header_data> data) {
@@ -294,8 +276,9 @@ void read_request(stream& client, span<char> buffer,
             header->content_length - already_read;
         if (remaining == 0) {
           // Payload was already received.
-          done(request{std::move(*header),
-                       buffer.subspan(0, header->content_length)});
+          done(http_request{
+              header->method, std::move(header->target),
+              std::string_view(buffer.data(), header->content_length)});
         } else {
           // Read the remainder of the payload.
           client.read(
@@ -303,8 +286,9 @@ void read_request(stream& client, span<char> buffer,
               [&client, buffer, header = std::move(*header),
                done = std::move(done)](result<span<char>> payload) mutable {
                 if (payload.success()) {
-                  done(request{std::move(header),
-                               buffer.subspan(0, header.content_length)});
+                  done(http_request{
+                      header.method, std::move(header.target),
+                      std::string_view(buffer.data(), header.content_length)});
                 } else {
                   done(error{std::move(payload).status()});
                 }
@@ -313,70 +297,133 @@ void read_request(stream& client, span<char> buffer,
       });
 }
 
+// TODO: Implement `Connection: keep-alive`, where the same connection can be
+// reused for subsequent requests. This will require smarter handling of the
+// request reading since currently we may read beyond the end of the request
+// payload and then discard those trailing bytes.
 struct connection {
-  static void spawn(stream client) noexcept {
-    auto self = std::make_shared<connection>(std::move(client));
-    read_request(self->client, self->buffer, [self](result<request> r) {
+  static void spawn(stream client, const handler_map& handlers) noexcept {
+    auto self = std::make_shared<connection>(std::move(client), handlers);
+    read_request(self->client, self->buffer, [self](result<http_request> r) {
       if (r.success()) {
-        self->respond(self, std::move(*r));
+        r->respond = [self](result<http_response> response) {
+          self->respond(self, std::move(response));
+        };
+        auto handler = self->handlers.find(r->target.path);
+        if (handler == self->handlers.end()) {
+          r->respond(error{status(http_status::not_found,
+                                  "no handler for " + r->target.path)});
+        } else {
+          handler->second(std::move(*r));
+        }
       } else {
         std::cerr << r.status() << '\n';
       }
     });
   }
 
-  connection(stream client) noexcept : client(std::move(client)) {}
+  connection(stream client, const handler_map& handlers) noexcept
+      : client(std::move(client)), handlers(handlers) {}
 
-  void respond(std::shared_ptr<connection> self, request r) noexcept {
-    // TODO: Replace this dummy handling with sensible logic.
-    std::cout << r.method << ' ' << r.target.path << '\n';
-    std::string message = "Hello from " + r.target.path + "!";
-    int size = std::sprintf(buffer,
-                            "HTTP/1.1 200 OK\r\n"
-                            "Content-Type: text/plain\r\n"
-                            "Content-Length: %d\r\n"
-                            "\r\n"
-                            "%s",
-                            (int)message.size(), message.c_str());
-    if (size < 0) {
-      std::cerr << "sprintf error :(\n";
-      return;
+  static http_status code(const status& s) noexcept {
+    if (s.domain().domain() == "http") return http_status{s.code()};
+    switch (status_code{s.canonical().code()}) {
+      case status_code::ok:
+        return http_status::ok;
+      case status_code::client_error:
+        return http_status::bad_request;
+      case status_code::transient_error:
+        return http_status::internal_server_error;
+      case status_code::permanent_error:
+        return http_status::internal_server_error;
+      case status_code::not_available:
+        return http_status::bad_request;
+      case status_code::unknown_error:
+        return http_status::internal_server_error;
+      default:
+        return http_status::internal_server_error;
     }
-    client.write(span<const char>(buffer).subspan(0, size), [self](status s) {
+  }
+
+  void respond(std::shared_ptr<connection> self, http_response r) noexcept {
+    std::ostringstream output_stream;
+    output_stream << "HTTP/1.1 " << (int)r.status << ' ' << status(r.status)
+                  << "\r\n"
+                     "Content-Type: "
+                  << r.content_type
+                  << "\r\n"
+                     "Content-Length: "
+                  << r.payload.size()
+                  << "\r\n"
+                     "\r\n"
+                  << r.payload;
+    output = std::move(output_stream).str();
+    client.write(output, [self](status s) {
       if (s.failure()) {
-        std::cerr << s << '\n';
+        std::cerr << "Error responding to client: " << s << '\n';
       }
-      // TODO: Implement `Connection: keep-alive`, where the same connection can
-      // be reused for subsequent requests. This will require smarter handling
-      // of the request reading since currently we may read beyond the end of
-      // the request payload and then discard those trailing bytes.
     });
   }
 
-  char buffer[65536];
+  void respond(std::shared_ptr<connection> self, error e) noexcept {
+    const http_status c = code(e);
+    std::ostringstream body_stream;
+    body_stream << e;
+    std::string body = std::move(body_stream).str();
+    std::ostringstream output_stream;
+    output_stream << "HTTP/1.1 " << (int)c << " " << status(c)
+                  << "\r\n"
+                     "Content-Type: text/plain\r\n"
+                     "Content-Length: "
+                  << body.size()
+                  << "\r\n"
+                     "\r\n"
+                  << body;
+    output = std::move(output_stream).str();
+    client.write(output, [self](status s) {
+      if (s.failure()) {
+        std::cerr << s << '\n';
+      }
+    });
+  }
+
+  void respond(std::shared_ptr<connection> self,
+               result<http_response> r) noexcept {
+    if (r.success()) {
+      respond(std::move(self), std::move(*r));
+    } else {
+      respond(std::move(self), error{std::move(r).status()});
+    }
+  }
+
   stream client;
+  const handler_map& handlers;
+  char buffer[65536];
+  std::string output;
 };
 
 struct accept_handler {
-  static void spawn(acceptor& server) noexcept {
-    auto self = std::make_shared<accept_handler>(server);
+  static void spawn(acceptor& server, const handler_map& handlers) noexcept {
+    auto self = std::make_shared<accept_handler>(server, handlers);
     self->do_accept(self);
   }
 
-  accept_handler(acceptor& server) noexcept : server(server) {}
+  accept_handler(acceptor& server, const handler_map& handlers) noexcept
+      : server(server), handlers(handlers) {}
 
   void do_accept(std::shared_ptr<accept_handler> self) noexcept {
     server.accept([self](result<stream> client) {
       if (client.failure()) {
         std::cerr << client.status() << '\n';
       } else {
-        connection::spawn(std::move(*client));
+        connection::spawn(std::move(*client), self->handlers);
         self->do_accept(self);
       }
     });
   }
 
   acceptor& server;
+  const handler_map& handlers;
 };
 
 }  // namespace
@@ -397,6 +444,20 @@ std::ostream& operator<<(std::ostream& output, http_method method) noexcept {
   return output << "<unknown method>";
 }
 
+result<uri> parse_uri(std::string_view input) noexcept {
+  // TODO: Determine if std::regex is good enough. If not, replace this with
+  // a hand-coded implementation.
+  static const std::regex pattern(
+      R"(^(([^:/?#]+):)?(//([^/?#]*))?([^?#]*)(\?([^#]*))?(#(.*))?)",
+      std::regex_constants::optimize | std::regex_constants::extended);
+  std::cmatch match;
+  if (!std::regex_match(input.data(), input.data() + input.size(), match,
+                        pattern)) {
+    return error{status(http_status::bad_request, "cannot parse URI")};
+  }
+  return uri{match[2], match[4], match[5], match[7], match[9]};
+}
+
 result<http_server> http_server::create(const address& address) noexcept {
   http_server server;
   if (status s = server.init(address); s.failure()) return error{std::move(s)};
@@ -413,8 +474,12 @@ status http_server::init(const address& address) noexcept {
   return status_code::ok;
 }
 
+void http_server::handle(std::string path, handler h) noexcept {
+  handlers_.try_emplace(std::move(path), std::move(h));
+}
+
 status http_server::run() {
-  accept_handler::spawn(acceptor_);
+  accept_handler::spawn(acceptor_, handlers_);
   return context_.run();
 }
 

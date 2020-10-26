@@ -94,6 +94,11 @@ class [[nodiscard]] status {
   status(T&& code, std::string message) noexcept
       : status(make_status(std::forward<T>(code), std::move(message))) {}
 
+  // std::errc needs special handling because we cannot add a make_status
+  // function to the std namespace.
+  status(std::errc) noexcept;
+  status(std::errc, std::string message) noexcept;
+
   ~status() noexcept;
 
   // Not copyable.
@@ -149,15 +154,6 @@ class [[nodiscard]] error : public status {
   bool success() const noexcept;
   bool failure() const noexcept;
 };
-
-struct posix_code {
-  posix_code(int code) noexcept;
-  posix_code(std::errc code) noexcept;
-  int value;
-};
-
-status make_status(posix_code) noexcept;
-status make_status(posix_code, std::string message) noexcept;
 
 // Helper functions for constructing errors with messages.
 error client_error(std::string message) noexcept;

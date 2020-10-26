@@ -6,12 +6,23 @@
 
 namespace util {
 
-enum http_status : int {
+enum class http_status : int {
   ok = 200,
+  bad_request = 400,
+  payload_too_large = 413,
+  request_header_fields_too_large = 431,
+  not_implemented = 501,
 };
 
 status make_status(http_status) noexcept;
 status make_status(http_status, std::string) noexcept;
+
+enum class http_method {
+  get,
+  post,
+};
+
+std::ostream& operator<<(std::ostream&, http_method) noexcept;
 
 class http_server {
  public:

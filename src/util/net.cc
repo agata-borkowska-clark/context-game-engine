@@ -172,12 +172,7 @@ unique_handle::unique_handle() noexcept : handle_(file_handle::none) {}
 unique_handle::unique_handle(file_handle handle) noexcept
     : handle_(handle) {}
 
-unique_handle::~unique_handle() noexcept {
-  if (handle_ != file_handle::none) {
-    std::cout << "bye bye " << (int)handle_ << '\n';
-  }
-  must(close());
-}
+unique_handle::~unique_handle() noexcept { must(close()); }
 
 unique_handle::unique_handle(unique_handle&& other) noexcept
     : handle_(std::exchange(other.handle_, file_handle::none)) {}
@@ -205,12 +200,20 @@ status unique_handle::close() noexcept {
 }
 
 result<io_context> io_context::create() noexcept {
-  unique_handle epoll{file_handle{epoll_create(/*unused size*/42)}};
-  if (!epoll) {
+  io_context context;
+  if (status s = context.init(); s.failure()) return error{std::move(s)};
+  return context;
+}
+
+io_context::io_context() noexcept {}
+
+status io_context::init() noexcept {
+  epoll_ = unique_handle{file_handle{epoll_create(/*unused size*/42)}};
+  if (!epoll_) {
     return error{
         posix_status(errno, "from epoll_create in io_context::create()")};
   }
-  return io_context{std::move(epoll)};
+  return status_code::ok;
 }
 
 io_context::io_context(unique_handle epoll) noexcept
@@ -303,16 +306,26 @@ std::ostream& operator<<(std::ostream& output, const address& a) {
 
 result<socket> socket::create(io_context& context,
                               unique_handle handle) noexcept {
-  if (!handle) return result<socket>(socket());
-  auto state = std::make_unique<io_state>();
-  state->handle = handle.get();
-  if (status s = context.register_handle(*state); !s.success()) {
+  socket out;
+  if (status s = out.init(context, std::move(handle)); s.failure()) {
     return error{std::move(s)};
   }
-  return socket(context, std::move(handle), std::move(state));
+  return out;
 }
 
 socket::socket() noexcept {}
+
+status socket::init(io_context& context, unique_handle handle) noexcept {
+  if (!handle) return client_error("cannot init a socket with an empty handle");
+  context_ = &context;
+  handle_ = std::move(handle);
+  state_ = std::make_unique<io_state>();
+  state_->handle = handle_.get();
+  if (status s = context.register_handle(*state_); !s.success()) {
+    return error{std::move(s)};
+  }
+  return status_code::ok;
+}
 
 socket::~socket() noexcept {
   if (handle_) must(context_->unregister_handle(handle_.get()));
@@ -329,6 +342,7 @@ socket::socket(io_context& context, unique_handle handle,
       handle_(std::move(handle)),
       state_(std::move(state)) {}
 
+stream::stream() noexcept {}
 stream::stream(socket socket) noexcept
     : socket_(std::move(socket)) {}
 
@@ -423,6 +437,7 @@ void stream::write(span<const char> buffer,
 stream::operator bool() const noexcept { return (bool)socket_; }
 io_context& stream::context() const noexcept { return socket_.context(); }
 
+acceptor::acceptor() noexcept {}
 acceptor::acceptor(socket socket) noexcept : socket_(std::move(socket)) {}
 
 void acceptor::accept(std::function<void(result<stream>)> done) noexcept {

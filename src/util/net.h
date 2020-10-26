@@ -46,9 +46,14 @@ struct io_state {
 
 class io_context : public executor {
  public:
-  // Create a new io_context or return an error explaining why one could not be
-  // made.
+  // Equivalent to constructing an io_context and calling init().
   static result<io_context> create() noexcept;
+
+  // Construct an uninitialized io_context.
+  io_context() noexcept;
+  // Initialize the io_context. This must be called before any other operation
+  // is performed.
+  status init() noexcept;
 
   // Schedule a task to run in this context.
   void schedule_at(time_point, task) noexcept override;
@@ -92,9 +97,16 @@ std::ostream& operator<<(std::ostream&, const address&);
 // socket functionality: for that you want acceptor or stream from below.
 class socket {
  public:
+  // Equivalent to constructing a socket and calling init().
   static result<socket> create(io_context& context,
                                unique_handle handle) noexcept;
+
+  // Construct an empty socket.
   socket() noexcept;
+
+  // Initialise the socket. Must only be called on empty sockets.
+  status init(io_context& context, unique_handle handle) noexcept;
+
   ~socket() noexcept;
 
   // Not copyable.
@@ -125,6 +137,7 @@ class socket {
 // A TCP socket, supporting sequential reads and writes.
 class stream {
  public:
+  stream() noexcept;
   stream(socket socket) noexcept;
 
   // Asynchronously read data from the stream into the provided buffer. The
@@ -164,6 +177,7 @@ class acceptor {
  public:
   static constexpr int max_pending_connections = 8;
 
+  acceptor() noexcept;
   acceptor(socket socket) noexcept;
 
   // Asynchronously accept a new connection. On success, returns the newly

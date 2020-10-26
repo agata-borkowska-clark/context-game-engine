@@ -346,6 +346,10 @@ struct connection {
       if (s.failure()) {
         std::cerr << s << '\n';
       }
+      // TODO: Implement `Connection: keep-alive`, where the same connection can
+      // be reused for subsequent requests. This will require smarter handling
+      // of the request reading since currently we may read beyond the end of
+      // the request payload and then discard those trailing bytes.
     });
   }
 

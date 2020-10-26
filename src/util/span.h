@@ -67,6 +67,9 @@ class span {
     return span(data_ + offset, std::min(size, size_ - offset));
   }
 
+  constexpr T* begin() const noexcept { return data_; }
+  constexpr T* end() const noexcept { return data_ + size_; }
+
  private:
   T* data_;
   std::size_t size_;

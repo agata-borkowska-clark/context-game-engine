@@ -9,10 +9,10 @@ namespace util {
 class encoder_base {
  public:
     encoder_base(std::ostream& target_stream) noexcept
-      : out_stream_(&target stream) {}
+      : out_stream_(&target_stream) {}
  protected:
     std::ostream* out_stream_;
-}
+};
 
 template <typename T> 
 class encoder;
@@ -25,22 +25,22 @@ void encode(std::ostream& target, const T& value) noexcept {
 
 // Decoders for concrete types
 template <>
-class encoder<int> : public encoder_base {
+class encoder<unsigned int> : public encoder_base {
  public:
-  void operator()(const int& value) const noexcept;
+  void operator()(const unsigned int& value) const noexcept;
 };
 
-template <>
+/*template <>
 class encoder<float> : public encoder_base {
  public:
   void operator()(const float& value) const noexcept;
-};  
+};*/  
 
 template <>
 class encoder<char> : public encoder_base {
  public:
   void operator()(const char& value) const noexcept;
-}
+};
 
 template <typename T>
 class encoder<std::vector<T>> : public encoder_base {
@@ -52,7 +52,7 @@ class encoder<std::vector<T>> : public encoder_base {
       encode(*out_stream_, value[i]);
     }
   };
-}
+};
 
 }  // namespace util
 

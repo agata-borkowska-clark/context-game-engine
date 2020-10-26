@@ -2,24 +2,19 @@
 
 namespace util {
 
-/*void encoder::encode(unsigned int t) {
-  static_assert(sizeof(t) == 4);
-  out_stream << static_cast<unsigned char>(t >> 24);
-  out_stream << static_cast<unsigned char>(t >> 16);
-  out_stream << static_cast<unsigned char>(t >> 8);
-  out_stream << static_cast<unsigned char>(t);
+void encoder<unsigned int>::operator() (const unsigned int& value) const noexcept {
+  static_assert(sizeof(value) == 4);
+  *out_stream_ << (value >> 24);
+  *out_stream_ << (value >> 16);
+  *out_stream_ << (value >> 8);
+  *out_stream_ << (value);
 }
 
-void encoder::encode(int t) {
-  unsigned int t2 = static_cast<unsigned int>(t);
-  encoder::encode(t2);
-}
-
-void encoder::encode(char t) {
-  out_stream << t;
+/*encoder<float> operator() (char& value) const noexcept {
+  // TODO
 }*/
 
-encoder<char> operator() (char& value) const noexcept {
+void encoder<char>::operator() (const char& value) const noexcept {
   *out_stream_ << value;
 }
 

@@ -426,6 +426,8 @@ socket::socket(io_context& context, unique_handle handle,
       handle_(std::move(handle)),
       state_(std::move(state)) {}
 
+namespace tcp {
+
 stream::stream() noexcept {}
 stream::stream(socket socket) noexcept
     : socket_(std::move(socket)) {}
@@ -592,5 +594,7 @@ result<stream> connect(io_context& context, const address& address) {
   if (connect_result == -1) return error{std::errc{errno}};
   return stream{std::move(*socket)};
 }
+
+}  // namespace tcp
 
 }  // namespace util

@@ -160,6 +160,8 @@ class socket {
   std::unique_ptr<io_state> state_;
 };
 
+namespace tcp {
+
 // A TCP socket, supporting sequential reads and writes.
 class stream {
  public:
@@ -227,5 +229,7 @@ result<acceptor> bind(io_context&, const address&);
 
 // Client: connect a stream to the given address.
 result<stream> connect(io_context&, const address&);
+
+}  // namespace tcp
 
 }  // namespace util

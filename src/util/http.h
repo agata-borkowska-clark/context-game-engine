@@ -73,7 +73,7 @@ class http_server {
 
  private:
   io_context context_;
-  acceptor acceptor_;
+  tcp::acceptor acceptor_;
   std::map<std::string, handler> handlers_;
 };
 

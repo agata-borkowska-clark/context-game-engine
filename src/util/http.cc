@@ -81,10 +81,10 @@ struct header_data {
 // trailing bytes which were not part of the header. The caller must consider
 // the trailing bytes as a prefix for any subsequent reads.
 void read_request_header(
-    stream& client, span<char> buffer,
+    tcp::stream& client, span<char> buffer,
     std::function<void(result<header_data>)> done) noexcept {
   struct reader {
-    stream& client;
+    tcp::stream& client;
     span<char> buffer;
     std::function<void(result<header_data>)> done;
     span<char>::size_type bytes_read = 0;
@@ -249,7 +249,7 @@ struct request : request_line {
   span<char> payload;
 };
 
-void read_request(stream& client, span<char> buffer,
+void read_request(tcp::stream& client, span<char> buffer,
                   std::function<void(result<http_request>)> done) noexcept {
   read_request_header(
       client, buffer,
@@ -302,7 +302,7 @@ void read_request(stream& client, span<char> buffer,
 // request reading since currently we may read beyond the end of the request
 // payload and then discard those trailing bytes.
 struct connection {
-  static void spawn(stream client, const handler_map& handlers) noexcept {
+  static void spawn(tcp::stream client, const handler_map& handlers) noexcept {
     auto self = std::make_shared<connection>(std::move(client), handlers);
     read_request(self->client, self->buffer, [self](result<http_request> r) {
       if (r.success()) {
@@ -322,7 +322,7 @@ struct connection {
     });
   }
 
-  connection(stream client, const handler_map& handlers) noexcept
+  connection(tcp::stream client, const handler_map& handlers) noexcept
       : client(std::move(client)), handlers(handlers) {}
 
   static http_status code(const status& s) noexcept {
@@ -396,23 +396,24 @@ struct connection {
     }
   }
 
-  stream client;
+  tcp::stream client;
   const handler_map& handlers;
   char buffer[65536];
   std::string output;
 };
 
 struct accept_handler {
-  static void spawn(acceptor& server, const handler_map& handlers) noexcept {
+  static void spawn(tcp::acceptor& server,
+                    const handler_map& handlers) noexcept {
     auto self = std::make_shared<accept_handler>(server, handlers);
     self->do_accept(self);
   }
 
-  accept_handler(acceptor& server, const handler_map& handlers) noexcept
+  accept_handler(tcp::acceptor& server, const handler_map& handlers) noexcept
       : server(server), handlers(handlers) {}
 
   void do_accept(std::shared_ptr<accept_handler> self) noexcept {
-    server.accept([self](result<stream> client) {
+    server.accept([self](result<tcp::stream> client) {
       if (client.failure()) {
         std::cerr << client.status() << '\n';
       } else {
@@ -422,7 +423,7 @@ struct accept_handler {
     });
   }
 
-  acceptor& server;
+  tcp::acceptor& server;
   const handler_map& handlers;
 };
 
@@ -468,7 +469,7 @@ http_server::http_server() noexcept {}
 
 status http_server::init(const address& address) noexcept {
   if (status s = context_.init(); s.failure()) return error{std::move(s)};
-  result<acceptor> acceptor = bind(context_, address);
+  result<tcp::acceptor> acceptor = tcp::bind(context_, address);
   if (acceptor.failure()) return error{std::move(acceptor).status()};
   acceptor_ = std::move(*acceptor);
   return status_code::ok;

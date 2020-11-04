@@ -1,5 +1,6 @@
 #include "net.h"
 
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <iostream>
 #include <netdb.h>
@@ -163,6 +164,20 @@ status set_non_blocking(socket& socket) {
     return std::errc{errno};
   }
   return status_code::ok;
+}
+
+struct host_port {
+  char host[248];
+  char port[8];
+};
+
+result<host_port> get_host_port(const addrinfo* info) noexcept {
+  host_port out;
+  const int status =
+      getnameinfo(info->ai_addr, info->ai_addrlen, out.host, sizeof(out.host),
+                  out.port, sizeof(out.port), NI_NUMERICSERV);
+  if (status != 0) return gai_error(status);
+  return out;
 }
 
 }  // namespace
@@ -334,6 +349,29 @@ address& address::operator=(address&& other) noexcept {
   if (data_) freeaddrinfo((addrinfo*)data_);
   data_ = std::exchange(other.data_, nullptr);
   return *this;
+}
+
+address::operator bool() const noexcept { return data_; }
+
+result<std::string> address::to_string() const noexcept {
+  const auto* a = (addrinfo*)data_;
+  result<host_port> temp = get_host_port(a);
+  if (temp.failure()) return error{std::move(temp).status()};
+  if (a->ai_family == AF_INET6) {
+    return "[" + std::string(temp->host) + "]:" + temp->port;
+  } else {
+    return std::string(temp->host) + ":" + temp->port;
+  }
+}
+
+std::ostream& operator<<(std::ostream& output, const address& a) {
+  if (!a) {
+    return output << "(no address)";
+  } else if (auto x = a.to_string(); x.success()) {
+    return output << *x;
+  } else {
+    return output << "(" << x.status() << ")";
+  }
 }
 
 result<socket> socket::create(io_context& context,

@@ -104,6 +104,9 @@ class address {
   address(address&&) noexcept;
   address& operator=(address&&) noexcept;
 
+  explicit operator bool() const noexcept;
+  result<std::string> to_string() const noexcept;
+
  private:
   friend class address_internals;
 
@@ -111,6 +114,8 @@ class address {
 
   void* data_;
 };
+
+std::ostream& operator<<(std::ostream& output, const address& a);
 
 // Base socket class for raw sockets. This class does not expose any of the
 // socket functionality: for that you want acceptor or stream from below.

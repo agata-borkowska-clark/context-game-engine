@@ -15,13 +15,15 @@ std::string contents(const char* filename) noexcept {
 
 int main() {
   util::address a;
-  if (util::status s = a.init("0.0.0.0", "8000"); s.failure()) {
+  if (util::status s = a.init("::0", "8000"); s.failure()) {
     std::cerr << "Could not resolve server address: " << s << '\n';
     return 1;
   }
   util::http_server server;
-  if (util::status s = server.init(std::move(a)); s.failure()) {
-    std::cerr << "Failed to bind server: " << s << '\n';
+  if (util::status s = server.init(std::move(a)); s.success()) {
+    std::cout << "Serving on " << a << '\n';
+  } else {
+    std::cerr << "Failed to bind to " << a << ": " << s << '\n';
     return 1;
   }
   // Load the favicon.

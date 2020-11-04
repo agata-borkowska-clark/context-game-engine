@@ -14,14 +14,14 @@ std::string contents(const char* filename) noexcept {
 }
 
 int main() {
+  util::address a;
+  if (util::status s = a.init("0.0.0.0", "8000"); s.failure()) {
+    std::cerr << "Could not resolve server address: " << s << '\n';
+    return 1;
+  }
   util::http_server server;
-  if (util::status s = server.init({"0.0.0.0", 8000}); s.success()) {
-    std::cout << "Serving on 8000\n";
-  } else if (util::status s2 = server.init({"0.0.0.0", 8080}); s2.success()) {
-    std::cout << "Serving on 8080\n";
-  } else {
-    std::cerr << "Failed to bind to 8000 (" << s << ") or 8080 (" << s2
-              << ").\n";
+  if (util::status s = server.init(std::move(a)); s.failure()) {
+    std::cerr << "Failed to bind server: " << s << '\n';
     return 1;
   }
   // Load the favicon.

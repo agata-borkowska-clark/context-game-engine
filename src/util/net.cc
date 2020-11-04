@@ -298,8 +298,42 @@ status io_context::await_out(io_state& state, io_state::task resume) noexcept {
   return await_op<&io_state::do_out>(epoll_.get(), state, std::move(resume));
 }
 
-std::ostream& operator<<(std::ostream& output, const address& a) {
-  return output << a.host << ':' << a.port;
+class address_internals {
+ public:
+  static addrinfo* get(const address& address) noexcept {
+    return (addrinfo*)address.data_;
+  }
+};
+
+result<address> address::create(const char* host,
+                                const char* service) noexcept {
+  address a;
+  if (status s = a.init(host, service); s.failure()) return error{std::move(s)};
+  return a;
+}
+
+status address::init(const char* host, const char* service) noexcept {
+  addrinfo* info;
+  const int status = getaddrinfo(host, service, nullptr, &info);
+  if (status != 0) return gai_error(status);
+  if (data_) freeaddrinfo((addrinfo*)data_);
+  data_ = info;
+  return status_code::ok;
+}
+
+address::address() noexcept : data_(nullptr) {}
+
+address::~address() noexcept {
+  if (data_) freeaddrinfo((addrinfo*)data_);
+}
+
+address::address(address&& other) noexcept
+    : data_(std::exchange(other.data_, nullptr)) {}
+
+address& address::operator=(address&& other) noexcept {
+  if (data_) freeaddrinfo((addrinfo*)data_);
+  data_ = std::exchange(other.data_, nullptr);
+  return *this;
 }
 
 result<socket> socket::create(io_context& context,
@@ -340,7 +374,7 @@ file_handle socket::handle() const noexcept { return handle_.get(); }
 io_context& socket::context() const noexcept { return *context_; }
 io_state& socket::state() const noexcept { return *state_; }
 
-status socket::shutdown() const noexcept {
+status socket::shutdown() noexcept {
   if (::shutdown((int)handle_.get(), SHUT_RDWR) == -1) {
     return status(std::errc{errno}, "in socket::shutdown()");
   } else {
@@ -478,14 +512,11 @@ acceptor::operator bool() const noexcept { return (bool)socket_; }
 io_context& acceptor::context() const noexcept { return socket_.context(); }
 
 result<acceptor> bind(io_context& context, const address& address) {
-  // Resolve the address which we intend to bind to.
-  result<addr_info> info = addr_info::resolve(
-      address.host.c_str(), std::to_string(address.port).c_str());
-  if (info.failure()) return error{std::move(info).status()};
+  const addrinfo* const info = address_internals::get(address);
   // Create a socket in the right address family (e.g. IPv4 or IPv6).
-  result<socket> socket =
-      socket::create(context, unique_handle{file_handle{::socket(
-                                  info->get()->ai_family, SOCK_STREAM, 0)}});
+  result<socket> socket = socket::create(
+      context,
+      unique_handle{file_handle{::socket(info->ai_family, SOCK_STREAM, 0)}});
   if (socket.failure()) return error{std::move(socket).status()};
   // Switch the socket to non-blocking mode. This way if we try to perform any
   // blocking operation before it is ready it will fail immediately instead of
@@ -494,8 +525,8 @@ result<acceptor> bind(io_context& context, const address& address) {
     return error{std::move(s)};
   }
   // Bind to the address.
-  const int bind_result = ::bind((int)socket->handle(), info->get()->ai_addr,
-                                 info->get()->ai_addrlen);
+  const int bind_result =
+      ::bind((int)socket->handle(), info->ai_addr, info->ai_addrlen);
   if (bind_result == -1) return error{std::errc{errno}};
   // Start listening for incoming connections.
   const int listen_result =
@@ -505,14 +536,11 @@ result<acceptor> bind(io_context& context, const address& address) {
 }
 
 result<stream> connect(io_context& context, const address& address) {
-  // Resolve the address which we want to connect to.
-  result<addr_info> info = addr_info::resolve(
-      address.host.c_str(), std::to_string(address.port).c_str());
-  if (info.failure()) return error{std::move(info).status()};
+  const addrinfo* const info = address_internals::get(address);
   // Create a socket in the right address family (e.g. IPv4 or IPv6).
-  result<socket> socket =
-      socket::create(context, unique_handle{file_handle{::socket(
-                                  info->get()->ai_family, SOCK_STREAM, 0)}});
+  result<socket> socket = socket::create(
+      context,
+      unique_handle{file_handle{::socket(info->ai_family, SOCK_STREAM, 0)}});
   if (socket.failure()) return error{std::move(socket).status()};
   // Switch the socket to non-blocking mode. This way if we try to perform any
   // blocking operation before it is ready it will fail immediately instead of
@@ -521,8 +549,8 @@ result<stream> connect(io_context& context, const address& address) {
     return error{std::move(s)};
   }
   // Connect to the address.
-  const int connect_result = ::connect(
-      (int)socket->handle(), info->get()->ai_addr, info->get()->ai_addrlen);
+  const int connect_result =
+      ::connect((int)socket->handle(), info->ai_addr, info->ai_addrlen);
   if (connect_result == -1) return error{std::errc{errno}};
   return stream{std::move(*socket)};
 }

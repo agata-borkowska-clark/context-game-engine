@@ -86,12 +86,31 @@ class io_context : public executor {
   std::vector<work_item> work_;
 };
 
-struct address {
-  std::string host;
-  std::uint16_t port;
-};
+class address_internals;
 
-std::ostream& operator<<(std::ostream&, const address&);
+class address {
+ public:
+  static result<address> create(const char* host, const char* service) noexcept;
+  address() noexcept;
+  ~address() noexcept;
+
+  status init(const char* host, const char* service) noexcept;
+
+  // Non-copyable.
+  address(const address&) = delete;
+  address& operator=(const address&) = delete;
+
+  // Movable.
+  address(address&&) noexcept;
+  address& operator=(address&&) noexcept;
+
+ private:
+  friend class address_internals;
+
+  address(void* data) noexcept;
+
+  void* data_;
+};
 
 // Base socket class for raw sockets. This class does not expose any of the
 // socket functionality: for that you want acceptor or stream from below.
@@ -126,7 +145,7 @@ class socket {
   io_context& context() const noexcept;
   io_state& state() const noexcept;
 
-  status shutdown() const noexcept;
+  status shutdown() noexcept;
 
  private:
   socket(io_context&, unique_handle, std::unique_ptr<io_state>) noexcept;

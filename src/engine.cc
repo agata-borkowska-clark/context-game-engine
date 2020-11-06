@@ -1,17 +1,9 @@
 #include "util/http.h"
+#include "util/io.h"
 #include "util/result.h"
 
 #include <iostream>
 #include <fstream>
-
-std::string contents(const char* filename) noexcept {
-  std::ifstream file(filename);
-  if (!file.good()) {
-    std::cerr << "Could not open " << filename << ".\n";
-    std::exit(EXIT_FAILURE);
-  }
-  return std::string{std::istreambuf_iterator<char>(file), {}};
-}
 
 struct static_asset {
   const char* mime_type;
@@ -37,9 +29,9 @@ int main() {
   }
   // Load assets.
   for (const auto [mime_type, path] : assets) {
-    std::string data = contents((std::string("assets") + path).c_str());
-    server.handle(path, [data = std::move(data), mime_type](
-                            util::http_request request) {
+    std::string_view data =
+        util::contents((std::string("assets") + path).c_str());
+    server.handle(path, [data, mime_type](util::http_request request) {
                           request.respond(util::http_response{data, mime_type});
                         });
   }

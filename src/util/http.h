@@ -42,7 +42,6 @@ result<uri> parse_uri(std::string_view input) noexcept;
 struct http_response {
   std::string_view payload;
   std::string content_type;
-  http_status status = http_status::ok;
 };
 
 struct http_request {

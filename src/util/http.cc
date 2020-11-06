@@ -121,6 +121,7 @@ void read_request_header(
               break;
           }
         }
+        bytes_read += bytes->size();
         // The end of the header was not found, so we need to keep reading.
         read();
       } else {
@@ -345,9 +346,11 @@ struct connection {
     }
   }
 
-  void respond(std::shared_ptr<connection> self, http_response r) noexcept {
+  void respond(std::shared_ptr<connection> self, status s,
+               const http_response& r) noexcept {
     std::ostringstream output_stream;
-    output_stream << "HTTP/1.1 " << (int)r.status << ' ' << status(r.status)
+    http_status h = code(s);
+    output_stream << "HTTP/1.1 " << (int)h << ' ' << status(h)
                   << "\r\n"
                      "Content-Type: "
                   << r.content_type
@@ -390,7 +393,7 @@ struct connection {
   void respond(std::shared_ptr<connection> self,
                result<http_response> r) noexcept {
     if (r.success()) {
-      respond(std::move(self), std::move(*r));
+      respond(std::move(self), std::move(r).status(), std::move(*r));
     } else {
       respond(std::move(self), error{std::move(r).status()});
     }

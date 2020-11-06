@@ -13,6 +13,15 @@ std::string contents(const char* filename) noexcept {
   return std::string{std::istreambuf_iterator<char>(file), {}};
 }
 
+struct static_asset {
+  const char* mime_type;
+  const char* path;
+};
+
+constexpr static_asset assets[] = {
+  {"image/x-icon", "/favicon.ico"},
+};
+
 int main() {
   util::address a;
   if (util::status s = a.init("::0", "8000"); s.failure()) {
@@ -26,11 +35,14 @@ int main() {
     std::cerr << "Failed to bind to " << a << ": " << s << '\n';
     return 1;
   }
-  // Load the favicon.
-  const std::string favicon = contents("assets/favicon.ico");
-  server.handle("/favicon.ico", [favicon](util::http_request request) {
-    request.respond(util::http_response{favicon, "image/x-icon"});
-  });
+  // Load assets.
+  for (const auto [mime_type, path] : assets) {
+    std::string data = contents((std::string("assets") + path).c_str());
+    server.handle(path, [data = std::move(data), mime_type](
+                            util::http_request request) {
+                          request.respond(util::http_response{data, mime_type});
+                        });
+  }
   server.handle("/", [](util::http_request request) {
     request.respond(util::http_response{"Hello, World!", "text/plain"});
   });

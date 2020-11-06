@@ -4,6 +4,9 @@
 
 #include <iostream>
 #include <fstream>
+#include <string>
+
+using std::literals::operator""s;
 
 struct static_asset {
   const char* mime_type;
@@ -28,16 +31,17 @@ int main() {
     return 1;
   }
   // Load assets.
+  const auto register_asset =
+      [&](const char* mime_type, const char* path, const char* file_path) {
+        std::string_view data = util::contents(file_path);
+        server.handle(path, [mime_type, data](util::http_request request) {
+          request.respond(util::http_response{data, mime_type});
+        });
+      };
   for (const auto [mime_type, path] : assets) {
-    std::string_view data =
-        util::contents((std::string("assets") + path).c_str());
-    server.handle(path, [data, mime_type](util::http_request request) {
-                          request.respond(util::http_response{data, mime_type});
-                        });
+    register_asset(mime_type, path, ("assets"s + path).c_str());
   }
-  server.handle("/", [](util::http_request request) {
-    request.respond(util::http_response{"Hello, World!", "text/plain"});
-  });
+  register_asset("text/html", "/", "assets/index.html");
   if (util::status s = server.run(); s.failure()) {
     std::cerr << s << '\n';
     return 1;

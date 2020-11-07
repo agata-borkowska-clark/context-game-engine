@@ -39,9 +39,9 @@ int main() {
         });
       };
   for (const auto [mime_type, path] : assets) {
-    register_asset(mime_type, path, ("assets"s + path).c_str());
+    register_asset(mime_type, path, ("static"s + path).c_str());
   }
-  register_asset("text/html", "/", "assets/index.html");
+  register_asset("text/html", "/", "static/index.html");
   if (util::status s = server.run(); s.failure()) {
     std::cerr << s << '\n';
     return 1;

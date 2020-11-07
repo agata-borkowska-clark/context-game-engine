@@ -15,6 +15,7 @@ struct static_asset {
 
 constexpr static_asset assets[] = {
   {"image/x-icon", "/favicon.ico"},
+  {"text/javascript", "/scripts/main.js"},
 };
 
 int main() {

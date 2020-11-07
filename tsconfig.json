@@ -1,0 +1,16 @@
+{
+    "compilerOptions": {
+        "module": "es2015",
+        "target": "es2015",
+        "sourceMap": true,
+        "strict": true,
+        "baseUrl": ".",
+        "paths": {
+            "*": ["node_modules/*"]
+        },
+        "outDir": "build/scripts",
+        "allowSyntheticDefaultImports": true,
+        "sourceRoot": "/"
+    },
+    "include": ["src/**/*"]
+}

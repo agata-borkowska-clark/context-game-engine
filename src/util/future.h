@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <coroutine>
 #include <cstdlib>
 #include <utility>
@@ -10,6 +11,10 @@ void promise_exception();
 
 template <typename Future, typename T>
 struct promise_storage {
+  promise_storage() noexcept {}
+  ~promise_storage() noexcept {
+    if (state == state_type::resolved) value.~T();
+  }
   enum class state_type {
     unresolved,  // unfinished business, and the promise is still attached.
     resolved,    // computation is complete, promise is still attached.
@@ -25,24 +30,24 @@ struct promise_storage {
       state = state_type::resolved;
     }
   }
-  state_type state;
+  state_type state = state_type::unresolved;
   union { T value; };
 };
 
 template <typename Future, typename T>
 struct promise_type : promise_storage<Future, T> {
   using base = promise_storage<Future, T>;
-  Future get_return_object() noexcept { return Future(*this); }
+  Future get_return_object() noexcept { return Future(this); }
   template <typename U = T>
   requires std::is_constructible_v<T, U>
   void return_value(U&& x) noexcept(std::is_nothrow_constructible_v<T, U>) {
-    assert(base::state != base::state_type::resolved);
-    new(&base::value) T(std::forward<U>(x));
-    base::state = base::state_type::resolved;
+    assert(this->state != base::state_type::resolved);
+    new(&this->value) T(std::forward<U>(x));
+    this->state = base::state_type::resolved;
   }
   T consume() noexcept {
-    assert(base::state == base::state_type::resolved);
-    return std::move(base::value);
+    assert(this->state == base::state_type::resolved);
+    return std::move(this->value);
   }
 };
 
@@ -58,14 +63,14 @@ struct promise_type<Future, void> : promise_storage<Future, char> {
 template <typename T>
 class future {
  public:
-  using promise_type = ::util::promise_type<future, T>;
+  using promise_type = ::util::promise_type<future<T>, T>;
   using handle = std::coroutine_handle<promise_type>;
 
   future() noexcept = default;
   ~future() {
     if (!value_) return;
     if (value_->state == promise_type::state_type::resolved) {
-      handle::from_promise(value_)->destroy();
+      handle::from_promise(*value_).destroy();
     } else {
       value_->state = promise_type::state_type::detached;
     }
@@ -79,7 +84,7 @@ class future {
   future(future&& other) noexcept
       : value_(std::exchange(other.value_, nullptr)) {}
   future& operator=(future&& other) noexcept {
-    if (value_) handle::from_promise(value_).destroy();
+    if (value_) handle::from_promise(*value_).destroy();
     value_ = std::exchange(other.value_, nullptr);
     return *this;
   }
@@ -98,6 +103,7 @@ class future {
   }
 
  private:
+  friend promise_type;
   explicit future(promise_type* value) noexcept : value_(value) {}
   promise_type* value_ = nullptr;
 };

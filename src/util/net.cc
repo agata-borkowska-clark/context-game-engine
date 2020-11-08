@@ -482,7 +482,7 @@ void stream::read(span<char> buffer,
   reader{this, buffer, std::move(done)}.run();
 }
 
-future<result<span<char>>> stream::read(span<char> buffer) noexcept {
+future<status> stream::read(span<char> buffer) noexcept {
   span<char> remaining = buffer;
   while (!remaining.empty()) {
     result<span<char>> x = co_await read_some(remaining);
@@ -492,7 +492,7 @@ future<result<span<char>>> stream::read(span<char> buffer) noexcept {
       co_return error{std::move(x).status()};
     }
   }
-  co_return buffer;
+  co_return status_code::ok;
 }
 
 void stream::write_some(

@@ -182,7 +182,7 @@ class stream {
   // gets an error.
   void read(span<char> buffer,
             std::function<void(result<span<char>>)> done) noexcept;
-  future<result<span<char>>> read(span<char> buffer) noexcept;
+  future<status> read(span<char> buffer) noexcept;
 
   // Asynchronously write data from the provided buffer to the stream. The
   // continuation function will be invoked either with a status describing the

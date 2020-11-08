@@ -8,7 +8,7 @@ namespace util {
 
 void promise_exception();
 
-template <typename Promise, typename T>
+template <typename Future, typename T>
 struct promise_storage {
   enum class state_type {
     unresolved,  // unfinished business, and the promise is still attached.
@@ -20,7 +20,7 @@ struct promise_storage {
   void unhandled_exception() const noexcept { std::abort(); }
   void resolve() noexcept {
     if (state == state_type::detached) {
-      std::coroutine_handle<Promise>::from_promise(*this).destroy();
+      std::coroutine_handle<Future>::from_promise(*this).destroy();
     } else {
       state = state_type::resolved;
     }
@@ -29,10 +29,10 @@ struct promise_storage {
   union { T value; };
 };
 
-template <typename Promise, typename T>
-struct promise_type : promise_storage<Promise, T> {
-  using base = promise_storage<Promise, T>;
-  Promise get_return_object() noexcept { return Promise(*this); }
+template <typename Future, typename T>
+struct promise_type : promise_storage<Future, T> {
+  using base = promise_storage<Future, T>;
+  Future get_return_object() noexcept { return Future(*this); }
   template <typename U = T>
   requires std::is_constructible_v<T, U>
   void return_value(U&& x) noexcept(std::is_nothrow_constructible_v<T, U>) {
@@ -46,9 +46,9 @@ struct promise_type : promise_storage<Promise, T> {
   }
 };
 
-template <typename Promise>
-struct promise_type<Promise, void> : promise_storage<Promise, char> {
-  using base = promise_storage<Promise, char>;
+template <typename Future>
+struct promise_type<Future, void> : promise_storage<Future, char> {
+  using base = promise_storage<Future, char>;
   void return_void() noexcept {
     base::state = base::state_type::resolved;
   }
@@ -56,13 +56,13 @@ struct promise_type<Promise, void> : promise_storage<Promise, char> {
 };
 
 template <typename T>
-class promise {
+class future {
  public:
-  using promise_type = ::util::promise_type<promise, T>;
+  using promise_type = ::util::promise_type<future, T>;
   using handle = std::coroutine_handle<promise_type>;
 
-  promise() noexcept = default;
-  ~promise() {
+  future() noexcept = default;
+  ~future() {
     if (!value_) return;
     if (value_->state == promise_type::state_type::resolved) {
       handle::from_promise(value_)->destroy();
@@ -72,13 +72,13 @@ class promise {
   }
 
   // Non-copyable.
-  promise(const promise&) = delete;
-  promise& operator=(const promise&) = delete;
+  future(const future&) = delete;
+  future& operator=(const future&) = delete;
 
   // Movable.
-  promise(promise&& other) noexcept
+  future(future&& other) noexcept
       : value_(std::exchange(other.value_, nullptr)) {}
-  promise& operator=(promise&& other) noexcept {
+  future& operator=(future&& other) noexcept {
     if (value_) handle::from_promise(value_).destroy();
     value_ = std::exchange(other.value_, nullptr);
     return *this;
@@ -98,7 +98,7 @@ class promise {
   }
 
  private:
-  explicit promise(promise_type* value) noexcept : value_(value) {}
+  explicit future(promise_type* value) noexcept : value_(value) {}
   promise_type* value_ = nullptr;
 };
 

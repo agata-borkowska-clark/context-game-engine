@@ -441,93 +441,67 @@ stream::stream() noexcept {}
 stream::stream(socket socket) noexcept
     : socket_(std::move(socket)) {}
 
-void stream::read_some(span<char> buffer,
-                       std::function<void(result<span<char>>)> done) noexcept {
-  auto& state = socket_.state();
-  auto handler = [&state, buffer, done] {
-    int result = ::read((int)state.handle, buffer.data(), buffer.size());
-    if (result != -1) {
-      done(buffer.subspan(0, result));
-    } else {
-      done(error{std::errc{errno}});
-    }
-  };
-  if (status s = socket_.context().await_in(state, std::move(handler));
-      !s.success()) {
-    done(error{std::move(s)});
-  }
-}
-
-void stream::read(span<char> buffer,
-                  std::function<void(result<span<char>>)> done) noexcept {
-  // read is composed of a sequence of read_some calls.
-  struct reader {
-    stream* input;
-    span<char> buffer;
-    std::function<void(result<span<char>>)> done;
-    span<char>::size_type bytes_read = 0;
-    void run() {
-      input->read_some(buffer.subspan(bytes_read), *this);
-    }
-    void operator()(result<span<char>> result) {
-      if (result.failure()) {
-        done(std::move(result));
-        return;
-      }
-      bytes_read += result->size();
-      if (bytes_read < buffer.size()) {
-        run();
+promise<result<span<char>>> stream::read_some(span<char> buffer) noexcept {
+  return promise<result<span<char>>>([&](auto& promise) {
+    auto& state = socket_.state();
+    auto handler = [&state, buffer, &promise] {
+      int result = ::read((int)state.handle, buffer.data(), buffer.size());
+      if (result != -1) {
+        promise.resolve(buffer.subspan(0, result));
       } else {
-        done(buffer);
+        promise.resolve(error{std::errc{errno}});
       }
+    };
+    if (status s = socket_.context().await_in(state, std::move(handler));
+        !s.success()) {
+      promise.resolve(error{std::move(s)});
     }
-  };
-  reader{this, buffer, std::move(done)}.run();
+  });
 }
 
-void stream::write_some(
-    span<const char> buffer,
-    std::function<void(result<span<const char>>)> done) noexcept {
-  auto& state = socket_.state();
-  auto handler = [&state, buffer, done] {
-    int result =
-        ::send((int)state.handle, buffer.data(), buffer.size(), MSG_NOSIGNAL);
-    if (result != -1) {
-      done(buffer.subspan(result));
+future<status> stream::read(span<char> buffer) noexcept {
+  span<char> remaining = buffer;
+  while (!remaining.empty()) {
+    result<span<char>> x = co_await read_some(remaining);
+    if (x.success()) {
+      remaining = remaining.subspan(x->size());
     } else {
-      done(error{std::errc{errno}});
+      co_return error{std::move(x).status()};
     }
-  };
-  if (status s = socket_.context().await_out(state, std::move(handler));
-      !s.success()) {
-    done(error{std::move(s)});
   }
+  co_return status_code::ok;
 }
 
-void stream::write(span<const char> buffer,
-                   std::function<void(status)> done) noexcept {
-  // write is composed of a sequence of write_some calls.
-  struct writer {
-    stream* output;
-    span<const char> remaining;
-    std::function<void(status)> done;
-    void run() {
-      output->write_some(remaining, *this);
-    }
-    void operator()(result<span<const char>> result) {
-      if (result.failure()) {
-        done(std::move(result).status());
-        return;
-      }
-      remaining = *result;
-      if (!remaining.empty()) {
-        run();
+promise<result<span<const char>>> stream::write_some(
+    span<const char> buffer) noexcept {
+  return promise<result<span<const char>>>([&](auto& promise) {
+    auto& state = socket_.state();
+    auto handler = [&state, buffer, &promise] {
+      int result = ::write((int)state.handle, buffer.data(), buffer.size());
+      if (result != -1) {
+        promise.resolve(buffer.subspan(result));
       } else {
-        done(status_code::ok);
+        promise.resolve(error{std::errc{errno}});
       }
+    };
+    if (status s = socket_.context().await_out(state, std::move(handler));
+        !s.success()) {
+      promise.resolve(error{std::move(s)});
     }
-  };
-  writer{this, buffer, std::move(done)}.run();
+  });
+}
+
+future<status> stream::write(span<const char> buffer) noexcept {
+  span<const char> remaining = buffer;
+  while (!remaining.empty()) {
+    result<span<const char>> x = co_await write_some(remaining);
+    if (x.success()) {
+      remaining = *x;
+    } else {
+      co_return error{std::move(x).status()};
+    }
+  }
+  co_return status_code::ok;
 }
 
 stream::operator bool() const noexcept { return (bool)socket_; }
@@ -536,26 +510,28 @@ io_context& stream::context() const noexcept { return socket_.context(); }
 acceptor::acceptor() noexcept {}
 acceptor::acceptor(socket socket) noexcept : socket_(std::move(socket)) {}
 
-void acceptor::accept(std::function<void(result<stream>)> done) noexcept {
-  auto& state = socket_.state();
-  auto handler = [&context = socket_.context(), &state, done] {
-    int handle = ::accept4((int)state.handle, nullptr, nullptr, SOCK_NONBLOCK);
-    if (handle == -1) {
-      done(error{std::errc{errno}});
-      return;
+promise<result<stream>> acceptor::accept() noexcept {
+  return promise<result<stream>>([&](auto& promise) {
+    auto& state = socket_.state();
+    auto handler = [&context = socket_.context(), &state, &promise] {
+      int handle = accept4((int)state.handle, nullptr, nullptr, SOCK_NONBLOCK);
+      if (handle == -1) {
+        promise.resolve(error{std::errc{errno}});
+        return;
+      }
+      result<socket> s =
+          socket::create(context, unique_handle{file_handle{handle}});
+      if (s.success()) {
+        promise.resolve(std::move(*s));
+      } else {
+        promise.resolve(error{std::move(s).status()});
+      }
+    };
+    if (status s = socket_.context().await_in(state, std::move(handler));
+        !s.success()) {
+      promise.resolve(error{std::move(s)});
     }
-    result<socket> s =
-        socket::create(context, unique_handle{file_handle{handle}});
-    if (s.success()) {
-      done(std::move(*s));
-    } else {
-      done(error{std::move(s).status()});
-    }
-  };
-  if (status s = socket_.context().await_in(state, std::move(handler));
-      !s.success()) {
-    done(error{std::move(s)});
-  }
+  });
 }
 
 acceptor::operator bool() const noexcept { return (bool)socket_; }

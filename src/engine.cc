@@ -18,6 +18,13 @@ constexpr static_asset assets[] = {
   {"image/x-icon", "/favicon.ico"},
 };
 
+static auto serve_static(const char* mime_type, const char* file_path) {
+  std::string_view data = util::contents(file_path);
+  return [mime_type, data](util::http_request request) -> util::future<void> {
+    co_await request.respond(util::http_response{data, mime_type});
+  };
+}
+
 int main() {
   util::address a;
   if (util::status s = a.init("::0", "8000"); s.failure()) {
@@ -37,25 +44,17 @@ int main() {
     return 1;
   }
   // Load assets.
-  const auto register_asset =
-      [&](const char* mime_type, const char* path, const char* file_path) {
-        std::cout << mime_type << ": " << path << " -> " << file_path << '\n';
-        std::string_view data = util::contents(file_path);
-        server.handle(path, [mime_type, data](util::http_request request) {
-          request.respond(util::http_response{data, mime_type});
-        });
-      };
   for (const auto [mime_type, path] : assets) {
-    register_asset(mime_type, path, ("static"s + path).c_str());
+    server.handle(path, serve_static(mime_type, ("static"s + path).c_str()));
   }
   for (const auto entry :
        std::filesystem::recursive_directory_iterator("scripts")) {
     if (entry.path().extension() == ".js") {
-      register_asset("text/javascript", ("/"s + entry.path().c_str()).c_str(),
-                     entry.path().c_str());
+      server.handle(("/"s + entry.path().c_str()).c_str(),
+                    serve_static("text/javascript", entry.path().c_str()));
     }
   }
-  register_asset("text/html", "/", "static/index.html");
+  server.handle("/", serve_static("text/html", "static/index.html"));
   server.start();
   if (util::status s = context.run(); s.failure()) {
     std::cerr << s << '\n';

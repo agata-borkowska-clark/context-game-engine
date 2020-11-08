@@ -1,5 +1,6 @@
 #include "http.h"
 
+#include "future.h"
 #include "status_managers.h"
 
 #include <charconv>
@@ -72,7 +73,7 @@ constexpr char canned_response[] =
     "Hello, World!";
 
 struct header_data {
-  span<char> header;
+  std::string_view header;
   span<char> trailing_bytes;
 };
 
@@ -80,56 +81,38 @@ struct header_data {
 // two spans: the first span is the header, while the second span is any
 // trailing bytes which were not part of the header. The caller must consider
 // the trailing bytes as a prefix for any subsequent reads.
-void read_request_header(
-    tcp::stream& client, span<char> buffer,
-    std::function<void(result<header_data>)> done) noexcept {
-  struct reader {
-    tcp::stream& client;
-    span<char> buffer;
-    std::function<void(result<header_data>)> done;
-    span<char>::size_type bytes_read = 0;
-    int trailing_newlines = 0;
-    void read() noexcept {
-      auto free_space = buffer.subspan(bytes_read);
-      if (free_space.empty()) {
-        done(error{http_status::request_header_fields_too_large});
-      } else {
-        client.read_some(free_space, *this);
-      }
-    }
-    void operator()(result<span<char>> bytes) noexcept {
-      if (bytes.success()) {
-        // Scan the new input for two consecutive newline characters. '\r' is
-        // ignored, so the code will accept both '\r\n\r\n' and '\n\n'.
-        for (char& c : *bytes) {
-          switch (c) {
-            case '\r':
-              break;
-            case '\n':
-              trailing_newlines++;
-              if (trailing_newlines == 2) {
-                char* begin = buffer.data();
-                char* end = &c + 1;
-                span<char> header(begin, end - begin);
-                span<char> trailing(end, buffer.end() - end);
-                done(header_data{header, trailing});
-                return;
-              }
-              break;
-            default:
-              trailing_newlines = 0;
-              break;
+future<result<header_data>> read_request_header(
+    tcp::stream& client, span<char> buffer) noexcept {
+  span<char> remaining = buffer;
+  int trailing_newlines = 0;
+  while (!remaining.empty()) {
+    result<span<char>> x = co_await client.read_some(remaining);
+    if (x.failure()) co_return error{std::move(x).status()};
+    if (x->empty()) co_return error{http_status::bad_request};
+    // Scan the new input for two consecutive newline characters. '\r' is
+    // ignored, so the code will accept both '\r\n\r\n' and '\n\n'.
+    for (char& c : *x) {
+      switch (c) {
+        case '\r':
+          break;
+        case '\n':
+          trailing_newlines++;
+          if (trailing_newlines == 2) {
+            char* begin = buffer.data();
+            char* end = &c + 1;
+            std::string_view header(begin, end - begin);
+            span<char> trailing(end, buffer.end() - end);
+            co_return header_data{header, trailing};
           }
-        }
-        bytes_read += bytes->size();
-        // The end of the header was not found, so we need to keep reading.
-        read();
-      } else {
-        done(error{std::move(bytes).status()});
+          break;
+        default:
+          trailing_newlines = 0;
+          break;
       }
     }
-  };
-  reader{client, buffer, std::move(done)}.read();
+    remaining = remaining.subspan(x->size());
+  }
+  co_return error{http_status::request_header_fields_too_large};
 }
 
 struct request_line {
@@ -250,185 +233,133 @@ struct request : request_line {
   span<char> payload;
 };
 
-void read_request(tcp::stream& client, span<char> buffer,
-                  std::function<void(result<http_request>)> done) noexcept {
-  read_request_header(
-      client, buffer,
-      [&client, buffer, done = std::move(done)](result<header_data> data) {
-        if (data.failure()) {
-          done(error{std::move(data).status()});
-          return;
-        }
-        auto header = parse_request_header(
-            std::string_view(data->header.data(), data->header.size()));
-        if (header.failure()) {
-          done(error{std::move(header).status()});
-          return;
-        }
-        if (header->content_length > buffer.size()) {
-          done(error{http_status::payload_too_large});
-          return;
-        }
-        // Read the payload of the request.
-        const auto already_read = std::min<span<char>::size_type>(
-            data->trailing_bytes.size(), header->content_length);
-        std::memmove(buffer.data(), data->trailing_bytes.data(), already_read);
-        const span<char>::size_type remaining =
-            header->content_length - already_read;
-        if (remaining == 0) {
-          // Payload was already received.
-          done(http_request{
-              header->method, std::move(header->target),
-              std::string_view(buffer.data(), header->content_length)});
-        } else {
-          // Read the remainder of the payload.
-          client.read(
-              buffer.subspan(already_read, remaining),
-              [&client, buffer, header = std::move(*header),
-               done = std::move(done)](result<span<char>> payload) mutable {
-                if (payload.success()) {
-                  done(http_request{
-                      header.method, std::move(header.target),
-                      std::string_view(buffer.data(), header.content_length)});
-                } else {
-                  done(error{std::move(payload).status()});
-                }
-              });
-        }
-      });
+future<result<http_request>> read_request(tcp::stream& client,
+                                          span<char> buffer) noexcept {
+  result<header_data> parts = co_await read_request_header(client, buffer);
+  if (parts.failure()) co_return error{std::move(parts).status()};
+  result<request_header> header = parse_request_header(parts->header);
+  if (header.failure()) co_return error{std::move(header).status()};
+  if (header->content_length > buffer.size()) {
+    co_return error{http_status::payload_too_large};
+  }
+  // Read the request payload.
+  const int already_read =
+      std::min<int>(parts->trailing_bytes.size(), header->content_length);
+  std::memmove(buffer.data(), parts->trailing_bytes.data(), already_read);
+  const int remaining_bytes = header->content_length - already_read;
+  if (remaining_bytes) {
+    status s =
+        co_await client.read(buffer.subspan(already_read, remaining_bytes));
+    if (s.failure()) co_return error{std::move(s)};
+  }
+  co_return http_request{
+      .method = header->method,
+      .target = std::move(header->target),
+      .payload = std::string_view(buffer.data(), header->content_length)};
+}
+
+http_status code(const status& s) noexcept {
+  if (s.domain().domain() == "http") return http_status{s.code()};
+  switch (status_code{s.canonical().code()}) {
+    case status_code::ok:
+      return http_status::ok;
+    case status_code::client_error:
+      return http_status::bad_request;
+    case status_code::transient_error:
+      return http_status::internal_server_error;
+    case status_code::permanent_error:
+      return http_status::internal_server_error;
+    case status_code::not_available:
+      return http_status::bad_request;
+    case status_code::unknown_error:
+      return http_status::internal_server_error;
+    default:
+      return http_status::internal_server_error;
+  }
+}
+
+future<status> send_response(tcp::stream& client, http_status s,
+                             const http_response& r) noexcept {
+  // TODO: Consider finding a better way of serializing the result so that it
+  // doesn't need ostreams.
+  std::ostringstream header_stream;
+  header_stream << "HTTP/1.1 " << (int)s << ' ' << status(s) << "\r\n"
+                << "Content-Type: " << r.content_type << "\r\n"
+                << "Content-Length: " << r.payload.size() << "\r\n"
+                << "\r\n";
+  const std::string header = header_stream.str();
+  if (status s = co_await client.write(header); s.failure()) {
+    co_return error{std::move(s)};
+  }
+  co_return co_await client.write(r.payload);
+}
+
+future<status> send_response(tcp::stream& client, const error& e) noexcept {
+  std::ostringstream body_stream;
+  body_stream << e;
+  const std::string body = body_stream.str();
+  // Note: we might consider replacing this with "return", but we can't since
+  // the lifetime of body must outlive the execution of the coroutine.
+  co_return co_await send_response(
+      client, code(e),
+      http_response{.payload = body, .content_type = "text/plain"});
 }
 
 // TODO: Implement `Connection: keep-alive`, where the same connection can be
 // reused for subsequent requests. This will require smarter handling of the
 // request reading since currently we may read beyond the end of the request
 // payload and then discard those trailing bytes.
-struct connection {
-  static void spawn(tcp::stream client, const handler_map& handlers) noexcept {
-    auto self = std::make_shared<connection>(std::move(client), handlers);
-    read_request(self->client, self->buffer, [self](result<http_request> r) {
-      if (r.success()) {
-        r->respond = [self](result<http_response> response) {
-          self->respond(self, std::move(response));
-        };
-        auto handler = self->handlers.find(r->target.path);
-        if (handler == self->handlers.end()) {
-          r->respond(error{status(http_status::not_found,
-                                  "no handler for " + r->target.path)});
-        } else {
-          handler->second(std::move(*r));
-        }
-      } else {
-        std::cerr << r.status() << '\n';
-      }
-    });
-  }
-
-  connection(tcp::stream client, const handler_map& handlers) noexcept
-      : client(std::move(client)), handlers(handlers) {}
-
-  static http_status code(const status& s) noexcept {
-    if (s.domain().domain() == "http") return http_status{s.code()};
-    switch (status_code{s.canonical().code()}) {
-      case status_code::ok:
-        return http_status::ok;
-      case status_code::client_error:
-        return http_status::bad_request;
-      case status_code::transient_error:
-        return http_status::internal_server_error;
-      case status_code::permanent_error:
-        return http_status::internal_server_error;
-      case status_code::not_available:
-        return http_status::bad_request;
-      case status_code::unknown_error:
-        return http_status::internal_server_error;
-      default:
-        return http_status::internal_server_error;
-    }
-  }
-
-  void respond(std::shared_ptr<connection> self, status s,
-               const http_response& r) noexcept {
-    std::ostringstream output_stream;
-    http_status h = code(s);
-    output_stream << "HTTP/1.1 " << (int)h << ' ' << status(h)
-                  << "\r\n"
-                     "Content-Type: "
-                  << r.content_type
-                  << "\r\n"
-                     "Content-Length: "
-                  << r.payload.size()
-                  << "\r\n"
-                     "\r\n"
-                  << r.payload;
-    output = std::move(output_stream).str();
-    client.write(output, [self](status s) {
-      if (s.failure()) {
-        std::cerr << "Error responding to client: " << s << '\n';
-      }
-    });
-  }
-
-  void respond(std::shared_ptr<connection> self, error e) noexcept {
-    const http_status c = code(e);
-    std::ostringstream body_stream;
-    body_stream << e;
-    std::string body = std::move(body_stream).str();
-    std::ostringstream output_stream;
-    output_stream << "HTTP/1.1 " << (int)c << " " << status(c)
-                  << "\r\n"
-                     "Content-Type: text/plain\r\n"
-                     "Content-Length: "
-                  << body.size()
-                  << "\r\n"
-                     "\r\n"
-                  << body;
-    output = std::move(output_stream).str();
-    client.write(output, [self](status s) {
-      if (s.failure()) {
-        std::cerr << s << '\n';
-      }
-    });
-  }
-
-  void respond(std::shared_ptr<connection> self,
-               result<http_response> r) noexcept {
-    if (r.success()) {
-      respond(std::move(self), std::move(r).status(), std::move(*r));
-    } else {
-      respond(std::move(self), error{std::move(r).status()});
-    }
-  }
-
-  tcp::stream client;
-  const handler_map& handlers;
+future<status> handle_connection(tcp::stream& client,
+                                 const handler_map& handlers) noexcept {
   char buffer[65536];
-  std::string output;
-};
-
-struct accept_handler {
-  static void spawn(tcp::acceptor& server,
-                    const handler_map& handlers) noexcept {
-    auto self = std::make_shared<accept_handler>(server, handlers);
-    self->do_accept(self);
+  result<http_request> request = co_await read_request(client, buffer);
+  if (request.failure()) {
+    co_return co_await send_response(client,
+                                     error{std::move(request).status()});
   }
-
-  accept_handler(tcp::acceptor& server, const handler_map& handlers) noexcept
-      : server(server), handlers(handlers) {}
-
-  void do_accept(std::shared_ptr<accept_handler> self) noexcept {
-    server.accept([self](result<tcp::stream> client) {
-      if (client.failure()) {
-        std::cerr << client.status() << '\n';
-      } else {
-        connection::spawn(std::move(*client), self->handlers);
-        self->do_accept(self);
-      }
-    });
+  bool responded = false;
+  const auto respond = [&](result<http_response> response) -> future<status> {
+    assert(!responded);
+    responded = true;
+    if (response.success()) {
+      co_return co_await send_response(client, code(response.status()),
+                                       *response);
+    } else {
+      co_return co_await send_response(client,
+                                       error{std::move(response).status()});
+    }
+  };
+  const auto i = handlers.find(request->target.path);
+  if (i == handlers.end()) {
+    co_return co_await respond(error{http_status::not_found});
   }
+  request->respond = respond;
+  co_await i->second(std::move(*request));
+  if (responded) {
+    co_return status_code::ok;
+  } else {
+    co_return co_await respond(error{http_status::internal_server_error});
+  }
+}
 
-  tcp::acceptor& server;
-  const handler_map& handlers;
-};
+future<void> spawn_connection(tcp::stream client,
+                              const handler_map& handlers) noexcept {
+  if (status s = co_await handle_connection(client, handlers); s.failure()) {
+    std::cerr << s << '\n';
+  }
+}
+
+future<void> accept_loop(tcp::acceptor& server,
+                         const handler_map& handlers) noexcept {
+  while (true) {
+    result<tcp::stream> client = co_await server.accept();
+    if (client.failure()) {
+      std::cerr << "accept: " << client.status() << '\n';
+      co_return;
+    }
+    (void)spawn_connection(std::move(*client), handlers);
+  }
+}
 
 }  // namespace
 
@@ -483,7 +414,7 @@ void http_server::handle(std::string path, handler h) noexcept {
 }
 
 void http_server::start() noexcept {
-  accept_handler::spawn(acceptor_, handlers_);
+  (void)accept_loop(acceptor_, handlers_);
 }
 
 }  // namespace util

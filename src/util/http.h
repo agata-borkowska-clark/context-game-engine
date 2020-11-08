@@ -48,12 +48,12 @@ struct http_request {
   http_method method;
   uri target;
   std::string_view payload;
-  std::function<void(result<http_response>)> respond;
+  std::function<future<status>(result<http_response>)> respond;
 };
 
 class http_server {
  public:
-  using handler = std::function<void(http_request)>;
+  using handler = std::function<future<void>(http_request)>;
 
   // Equivalent to constructing a http_server and calling init().
   result<http_server> create(io_context&, const address&) noexcept;

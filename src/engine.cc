@@ -3,6 +3,7 @@
 #include "util/result.h"
 
 #include <iostream>
+#include <filesystem>
 #include <fstream>
 #include <string>
 
@@ -15,7 +16,6 @@ struct static_asset {
 
 constexpr static_asset assets[] = {
   {"image/x-icon", "/favicon.ico"},
-  {"text/javascript", "/scripts/main.js"},
 };
 
 int main() {
@@ -34,6 +34,7 @@ int main() {
   // Load assets.
   const auto register_asset =
       [&](const char* mime_type, const char* path, const char* file_path) {
+        std::cout << mime_type << ": " << path << " -> " << file_path << '\n';
         std::string_view data = util::contents(file_path);
         server.handle(path, [mime_type, data](util::http_request request) {
           request.respond(util::http_response{data, mime_type});
@@ -41,6 +42,13 @@ int main() {
       };
   for (const auto [mime_type, path] : assets) {
     register_asset(mime_type, path, ("static"s + path).c_str());
+  }
+  for (const auto entry :
+       std::filesystem::recursive_directory_iterator("scripts")) {
+    if (entry.path().extension() == ".js") {
+      register_asset("text/javascript", ("/"s + entry.path().c_str()).c_str(),
+                     entry.path().c_str());
+    }
   }
   register_asset("text/html", "/", "static/index.html");
   if (util::status s = server.run(); s.failure()) {

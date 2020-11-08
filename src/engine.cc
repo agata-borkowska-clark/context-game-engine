@@ -24,7 +24,12 @@ int main() {
     std::cerr << "Could not resolve server address: " << s << '\n';
     return 1;
   }
-  util::http_server server;
+  util::io_context context;
+  if (util::status s = context.init(); s.failure()) {
+    std::cerr << "Could not initialize IO context: " << s << '\n';
+    return 1;
+  }
+  util::http_server server(context);
   if (util::status s = server.init(std::move(a)); s.success()) {
     std::cout << "Serving on " << a << '\n';
   } else {
@@ -51,7 +56,8 @@ int main() {
     }
   }
   register_asset("text/html", "/", "static/index.html");
-  if (util::status s = server.run(); s.failure()) {
+  server.start();
+  if (util::status s = context.run(); s.failure()) {
     std::cerr << s << '\n';
     return 1;
   }

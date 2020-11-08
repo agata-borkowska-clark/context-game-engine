@@ -56,10 +56,10 @@ class http_server {
   using handler = std::function<void(http_request)>;
 
   // Equivalent to constructing a http_server and calling init().
-  result<http_server> create(const address&) noexcept;
+  result<http_server> create(io_context&, const address&) noexcept;
 
   // Construct an uninitialised http server.
-  http_server() noexcept;
+  http_server(io_context& context) noexcept;
 
   // Initialise the http server by binding it to the given address.
   status init(const address&) noexcept;
@@ -68,10 +68,10 @@ class http_server {
   void handle(std::string path, handler) noexcept;
 
   // Handle work for the server.
-  status run();
+  void start() noexcept;
 
  private:
-  io_context context_;
+  io_context* context_;
   tcp::acceptor acceptor_;
   std::map<std::string, handler> handlers_;
 };

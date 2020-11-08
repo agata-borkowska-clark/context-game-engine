@@ -462,17 +462,17 @@ result<uri> parse_uri(std::string_view input) noexcept {
   return uri{match[2], match[4], match[5], match[7], match[9]};
 }
 
-result<http_server> http_server::create(const address& address) noexcept {
-  http_server server;
+result<http_server> http_server::create(io_context& context,
+                                        const address& address) noexcept {
+  http_server server(context);
   if (status s = server.init(address); s.failure()) return error{std::move(s)};
   return server;
 }
 
-http_server::http_server() noexcept {}
+http_server::http_server(io_context& context) noexcept : context_(&context) {}
 
 status http_server::init(const address& address) noexcept {
-  if (status s = context_.init(); s.failure()) return error{std::move(s)};
-  result<tcp::acceptor> acceptor = tcp::bind(context_, address);
+  result<tcp::acceptor> acceptor = tcp::bind(*context_, address);
   if (acceptor.failure()) return error{std::move(acceptor).status()};
   acceptor_ = std::move(*acceptor);
   return status_code::ok;
@@ -482,9 +482,8 @@ void http_server::handle(std::string path, handler h) noexcept {
   handlers_.try_emplace(std::move(path), std::move(h));
 }
 
-status http_server::run() {
+void http_server::start() noexcept {
   accept_handler::spawn(acceptor_, handlers_);
-  return context_.run();
 }
 
 }  // namespace util

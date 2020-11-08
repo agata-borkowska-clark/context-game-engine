@@ -449,6 +449,12 @@ void stream::read_some(span<char> buffer,
   }
 }
 
+promise<result<span<char>>> stream::read_some(span<char> buffer) noexcept {
+  return promise<result<span<char>>>([&](auto& promise) {
+    read_some(buffer, [&promise](auto x) { promise.resolve(std::move(x)); });
+  });
+}
+
 void stream::read(span<char> buffer,
                   std::function<void(result<span<char>>)> done) noexcept {
   // read is composed of a sequence of read_some calls.
@@ -476,6 +482,19 @@ void stream::read(span<char> buffer,
   reader{this, buffer, std::move(done)}.run();
 }
 
+future<result<span<char>>> stream::read(span<char> buffer) noexcept {
+  span<char> remaining = buffer;
+  while (!remaining.empty()) {
+    result<span<char>> x = co_await read_some(remaining);
+    if (x.success()) {
+      remaining = remaining.subspan(x->size());
+    } else {
+      co_return error{std::move(x).status()};
+    }
+  }
+  co_return buffer;
+}
+
 void stream::write_some(
     span<const char> buffer,
     std::function<void(result<span<const char>>)> done) noexcept {
@@ -492,6 +511,13 @@ void stream::write_some(
       !s.success()) {
     done(error{std::move(s)});
   }
+}
+
+promise<result<span<const char>>> stream::write_some(
+    span<const char> buffer) noexcept {
+  return promise<result<span<const char>>>([&](auto& promise) {
+    write_some(buffer, [&promise](auto x) { promise.resolve(std::move(x)); });
+  });
 }
 
 void stream::write(span<const char> buffer,
@@ -520,6 +546,19 @@ void stream::write(span<const char> buffer,
   writer{this, buffer, std::move(done)}.run();
 }
 
+future<status> stream::write(span<const char> buffer) noexcept {
+  span<const char> remaining = buffer;
+  while (!remaining.empty()) {
+    result<span<const char>> x = co_await write_some(remaining);
+    if (x.success()) {
+      remaining = *x;
+    } else {
+      co_return error{std::move(x).status()};
+    }
+  }
+  co_return status_code::ok;
+}
+
 stream::operator bool() const noexcept { return (bool)socket_; }
 io_context& stream::context() const noexcept { return socket_.context(); }
 
@@ -546,6 +585,12 @@ void acceptor::accept(std::function<void(result<stream>)> done) noexcept {
       !s.success()) {
     done(error{std::move(s)});
   }
+}
+
+promise<result<stream>> acceptor::accept() noexcept {
+  return promise<result<stream>>([&](auto& promise) {
+    accept([&promise](auto x) { promise.resolve(std::move(x)); });
+  });
 }
 
 acceptor::operator bool() const noexcept { return (bool)socket_; }

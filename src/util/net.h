@@ -1,6 +1,8 @@
 #pragma once
 
 #include "executor.h"
+#include "future.h"
+#include "promise.h"
 #include "result.h"
 #include "span.h"
 #include "status.h"
@@ -168,15 +170,19 @@ class stream {
   stream() noexcept;
   stream(socket socket) noexcept;
 
+  // TODO: Remove the continuation-passing versions of these functions.
+
   // Asynchronously read data from the stream into the provided buffer. The
   // continuation function will be invoked either with a status describing the
   // failure or a non-empty span of bytes that were read.
   void read_some(span<char> buffer,
                  std::function<void(result<span<char>>)> done) noexcept;
+  promise<result<span<char>>> read_some(span<char> buffer) noexcept;
   // Like read_some, but will keep trying until it fills the entire buffer or
   // gets an error.
   void read(span<char> buffer,
             std::function<void(result<span<char>>)> done) noexcept;
+  future<result<span<char>>> read(span<char> buffer) noexcept;
 
   // Asynchronously write data from the provided buffer to the stream. The
   // continuation function will be invoked either with a status describing the
@@ -184,10 +190,13 @@ class stream {
   // byte smaller than the input.
   void write_some(span<const char> buffer,
                   std::function<void(result<span<const char>>)> done) noexcept;
+  promise<result<span<const char>>> write_some(
+      span<const char> buffer) noexcept;
   // Like write_some, but will keep trying until everything is written or an
   // error occurs.
   void write(span<const char> buffer,
              std::function<void(status)> done) noexcept;
+  future<status> write(span<const char> buffer) noexcept;
 
   // Check if the socket is initialised (non-empty).
   explicit operator bool() const noexcept;
@@ -212,6 +221,7 @@ class acceptor {
   // established stream. On failure, returns an error code explaining what went
   // wrong.
   void accept(std::function<void(result<stream>)> done) noexcept;
+  promise<result<stream>> accept() noexcept;
 
   // Check if the socket is initialised (non-empty).
   explicit operator bool() const noexcept;

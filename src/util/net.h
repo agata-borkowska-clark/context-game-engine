@@ -170,7 +170,8 @@ class stream {
 
   // Asynchronously read data from the stream into the provided buffer. The
   // continuation function will be invoked either with a status describing the
-  // failure or a non-empty span of bytes that were read.
+  // failure, a non-empty span of bytes that were read, or an empty span
+  // indicating that the end of the stream has been reached.
   void read_some(span<char> buffer,
                  std::function<void(result<span<char>>)> done) noexcept;
   // Like read_some, but will keep trying until it fills the entire buffer or

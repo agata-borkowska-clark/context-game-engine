@@ -166,6 +166,15 @@ status set_non_blocking(socket& socket) {
   return status_code::ok;
 }
 
+// Allow a socket to rebind to the same port.
+status allow_address_reuse(socket& socket) {
+  int enable = 1;
+  int r = setsockopt((int)socket.handle(), SOL_SOCKET, SO_REUSEADDR, &enable,
+                     sizeof(int));
+  if (r == -1) return std::errc{errno};
+  return status_code::ok;
+}
+
 struct host_port {
   char host[248];
   char port[8];
@@ -562,6 +571,12 @@ result<acceptor> bind(io_context& context, const address& address) {
   // blocking operation before it is ready it will fail immediately instead of
   // blocking.
   if (status s = set_non_blocking(*socket); s.failure()) {
+    return error{std::move(s)};
+  }
+  // Allow binding to a previously used port. This allows us to shut down and
+  // restart the server without waiting for a minute or so for the TCP timeout
+  // to expire.
+  if (status s = allow_address_reuse(*socket); s.failure()) {
     return error{std::move(s)};
   }
   // Bind to the address.

@@ -475,7 +475,8 @@ promise<result<span<const char>>> stream::write_some(
   return promise<result<span<const char>>>([&](auto& promise) {
     auto& state = socket_.state();
     auto handler = [&state, buffer, &promise] {
-      int result = ::write((int)state.handle, buffer.data(), buffer.size());
+      int result =
+          ::send((int)state.handle, buffer.data(), buffer.size(), MSG_NOSIGNAL);
       if (result != -1) {
         promise.resolve(buffer.subspan(result));
       } else {

@@ -463,11 +463,9 @@ future<status> stream::read(span<char> buffer) noexcept {
   span<char> remaining = buffer;
   while (!remaining.empty()) {
     result<span<char>> x = co_await read_some(remaining);
-    if (x.success()) {
-      remaining = remaining.subspan(x->size());
-    } else {
-      co_return error{std::move(x).status()};
-    }
+    if (x.failure()) co_return error{std::move(x).status()};
+    if (x->empty()) co_return error{status_code::exhausted};
+    remaining = remaining.subspan(x->size());
   }
   co_return status_code::ok;
 }
@@ -495,11 +493,9 @@ future<status> stream::write(span<const char> buffer) noexcept {
   span<const char> remaining = buffer;
   while (!remaining.empty()) {
     result<span<const char>> x = co_await write_some(remaining);
-    if (x.success()) {
-      remaining = *x;
-    } else {
-      co_return error{std::move(x).status()};
-    }
+    if (x.failure()) co_return error{std::move(x).status()};
+    if (x->size() == remaining.size()) co_return error{status_code::exhausted};
+    remaining = *x;
   }
   co_return status_code::ok;
 }

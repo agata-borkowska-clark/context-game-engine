@@ -14,6 +14,7 @@ enum class status_code : int {
   permanent_error,  // permanant failure, client should not retry.
   not_available,    // requested functionality is not available.
   unknown_error,    // an unknown error condition.
+  exhausted,        // a resource has been exhausted.
 };
 
 // A status stores a payload and an unowned pointer to a manager. The manager

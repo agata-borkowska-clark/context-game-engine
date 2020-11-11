@@ -21,6 +21,7 @@ struct status_code_manager_base : status_manager {
       case status_code::permanent_error: return "permanent_error";
       case status_code::not_available: return "not_available";
       case status_code::unknown_error: return "unknown_error";
+      case status_code::exhausted: return "exhausted";
     }
     return "<invalid>";
   }

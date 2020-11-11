@@ -25,9 +25,21 @@ static auto serve_static(const char* mime_type, const char* file_path) {
   };
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+  if (argc > 3) {
+    std::cerr << "Usage: engine [port | host port]\n";
+    return 1;
+  }
+  const char* host = "0.0.0.0";
+  const char* service = "8000";
+  if (argc == 2) {
+    service = argv[1];
+  } else if (argc == 3) {
+    host = argv[1];
+    service = argv[2];
+  }
   util::address a;
-  if (util::status s = a.init("::0", "8000"); s.failure()) {
+  if (util::status s = a.init(host, service); s.failure()) {
     std::cerr << "Could not resolve server address: " << s << '\n';
     return 1;
   }

@@ -490,7 +490,8 @@ void stream::write_some(
     std::function<void(result<span<const char>>)> done) noexcept {
   auto& state = socket_.state();
   auto handler = [&state, buffer, done] {
-    int result = ::write((int)state.handle, buffer.data(), buffer.size());
+    int result =
+        ::send((int)state.handle, buffer.data(), buffer.size(), MSG_NOSIGNAL);
     if (result != -1) {
       done(buffer.subspan(result));
     } else {

@@ -7,6 +7,8 @@
 #include <fstream>
 #include <string>
 
+namespace {
+
 using std::literals::operator""s;
 
 struct static_asset {
@@ -18,12 +20,14 @@ constexpr static_asset assets[] = {
   {"image/x-icon", "/favicon.ico"},
 };
 
-static auto serve_static(const char* mime_type, const char* file_path) {
+auto serve_static(const char* mime_type, const char* file_path) {
   std::string_view data = util::contents(file_path);
   return [mime_type, data](util::http_request request) -> util::future<void> {
     co_await request.respond(util::http_response{data, mime_type});
   };
 }
+
+}  // namespace
 
 int main(int argc, char* argv[]) {
   if (argc > 3) {

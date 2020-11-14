@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cassert>
+#include <utility>
+
 namespace util {
 namespace detail {
 
@@ -22,7 +25,7 @@ struct span_like<Container, T,
   using element_type =
       std::decay_t<decltype(std::declval<Container>().data()[0])>;
   static constexpr bool value =
-      std::is_convertible_v<element_type (&)[], T (&)[]>;
+      std::is_convertible_v<element_type (*)[], T (*)[]>;
 };
 
 template <typename Container, typename T>
@@ -50,7 +53,7 @@ class span {
   // Create a span from any compatible container (including other span types).
   template <typename Container,
             typename = std::enable_if_t<detail::span_like_v<Container, T>>>
-  constexpr span(Container& container) noexcept
+  constexpr span(Container&& container) noexcept
       : data_(container.data()), size_(container.size()) {}
 
   constexpr T* data() const noexcept { return data_; }
@@ -64,7 +67,7 @@ class span {
   constexpr span subspan(size_type offset = 0,
                          size_type size = npos) const noexcept {
     assert(offset <= size_);
-    return span(data_ + offset, std::min(size, size_ - offset));
+    return span(data_ + offset, size < size_ - offset ? size : size_ - offset);
   }
 
   constexpr T* begin() const noexcept { return data_; }

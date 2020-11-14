@@ -16,6 +16,9 @@ target_link_libraries(engine util)
 add_executable(base64 src/base64.cc)
 target_link_libraries(base64 util)
 
+add_executable(sha1 src/sha1.cc)
+target_link_libraries(sha1 util)
+
 if(MSVC)
   target_compile_options(engine PRIVATE /W4 /WX)
 else()

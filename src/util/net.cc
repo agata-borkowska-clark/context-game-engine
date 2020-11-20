@@ -444,6 +444,17 @@ stream::stream(socket socket) noexcept
 promise<result<span<char>>> stream::read_some(span<char> buffer) noexcept {
   return promise<result<span<char>>>([&](auto& promise) {
     auto& state = socket_.state();
+    // Try to complete the operation eagerly.
+    int result = ::read((int)state.handle, buffer.data(), buffer.size());
+    if (result != -1) {
+      promise.resolve(buffer.subspan(0, result));
+      return;
+    }
+    if (std::errc{errno} != std::errc::resource_unavailable_try_again) {
+      promise.resolve(error{std::errc{errno}});
+      return;
+    }
+    // Otherwise, wait for the socket to be ready before trying again.
     auto handler = [&state, buffer, &promise] {
       int result = ::read((int)state.handle, buffer.data(), buffer.size());
       if (result != -1) {
@@ -474,6 +485,18 @@ promise<result<span<const char>>> stream::write_some(
     span<const char> buffer) noexcept {
   return promise<result<span<const char>>>([&](auto& promise) {
     auto& state = socket_.state();
+    // Try to complete the operation eagerly.
+    int result =
+        ::send((int)state.handle, buffer.data(), buffer.size(), MSG_NOSIGNAL);
+    if (result != -1) {
+      promise.resolve(buffer.subspan(result));
+      return;
+    }
+    if (std::errc{errno} != std::errc::resource_unavailable_try_again) {
+      promise.resolve(error{std::errc{errno}});
+      return;
+    }
+    // Otherwise, wait for the socket to be ready before trying again.
     auto handler = [&state, buffer, &promise] {
       int result =
           ::send((int)state.handle, buffer.data(), buffer.size(), MSG_NOSIGNAL);

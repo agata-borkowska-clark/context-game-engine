@@ -31,7 +31,7 @@ result<int> parse_int(std::string_view value) {
   int result;
   const auto [ptr, code] = std::from_chars(first, last, result);
   if (ptr != last || code != std::errc{}) {
-    return error{status(http_status::bad_request)};
+    return error{status(http_status::bad_request, "bad size")};
   }
   return result;
 }
@@ -122,7 +122,9 @@ future<result<std::string_view>> read_line(tcp::stream& client,
     char temp[1];
     result<span<char>> x = co_await client.read_some(temp);
     if (x.failure()) co_return error{std::move(x).status()};
-    if (x->empty()) co_return error{http_status::bad_request};
+    if (x->empty()) {
+      co_return error{status(http_status::bad_request, "truncated line")};
+    }
     char c = (*x)[0];
     if (c == '\n') co_return std::string_view(buffer.data(), length);
     if (c != '\r') buffer[length++] = c;
@@ -150,7 +152,8 @@ future<result<request_line>> read_request_line(tcp::stream& client) noexcept {
   const char* const last = line->data() + line->size();
   const char* const method_end = std::find(first, last, ' ');
   if (method_end == last) {
-    co_return error{status(http_status::bad_request, "cannot parse request line")};
+    co_return error{
+        status(http_status::bad_request, "cannot parse request line")};
   }
   result<http_method> method =
       parse_method(case_insensitive_string_view(first, method_end - first));
@@ -216,71 +219,104 @@ future<status> send_response(tcp::stream& client, const error& e) noexcept {
       http_response{.payload = body, .content_type = "text/plain"});
 }
 
-future<result<http_request>> read_request(tcp::stream& client,
-                                          span<char> buffer) noexcept {
+struct simple_http_handler : http_handler {
+  simple_http_handler(
+      http_method method, uri target,
+      std::function<future<void>(http_request)> handler) noexcept
+      : method(method),
+        target(std::move(target)),
+        handler(std::move(handler)) {}
+
+  status header(case_insensitive_string_view name,
+                std::string_view value) noexcept final {
+    if (name == "Content-Length") {
+      result<int> x = parse_int(value);
+      if (x.failure()) return error{std::move(x).status()};
+      content_length = *x;
+    } else if (name == "Transfer-Encoding") {
+      return error{http_status::not_implemented};
+    }
+    return status_code::ok;
+  }
+
+  future<status> run(tcp::stream& client) noexcept override try {
+    char buffer_storage[65536];
+    const span<char> buffer = buffer_storage;
+    // Read the request payload.
+    if (content_length > buffer.size()) {
+      co_return error{http_status::payload_too_large};
+    }
+    const span<char> request_body = buffer.subspan(0, content_length);
+    if (status s = co_await client.read(request_body); s.failure()) {
+      co_return error{std::move(s)};
+    }
+    // Process the request.
+    bool responded = false;
+    auto respond = [&](result<http_response> response) -> future<status> {
+      assert(!responded);
+      responded = true;
+      if (response.success()) {
+        co_return co_await send_response(client, code(response.status()),
+                                         *response);
+      } else {
+        co_return co_await send_response(client,
+                                         error{std::move(response).status()});
+      }
+    };
+    co_await handler(http_request{
+        .method = method,
+        .target = std::move(target),
+        .payload = std::string_view(request_body.data(), request_body.size()),
+        .respond = std::move(respond),
+    });
+    assert(responded);
+    co_return status_code::ok;
+  } catch (std::exception& e) {
+    std::cerr << e.what() << '\n';
+  }
+
+  http_method method;
+  uri target;
+  std::function<future<void>(http_request)> handler;
+  int content_length = 0;
+};
+
+struct error_handler : http_handler {
+  error_handler(error result) noexcept : result(std::move(result)) {}
+
+  future<status> run(tcp::stream& client) noexcept {
+    co_return co_await send_response(client, std::move(result));
+  }
+
+  error result;
+};
+
+future<status> handle_connection(tcp::stream& client,
+                                 const handler_map& handlers) noexcept {
   // Read the request line.
   result<request_line> request_line = co_await read_request_line(client);
   if (request_line.failure()) co_return error{std::move(request_line).status()};
-  // Read the header fields.
-  int content_length = 0;
+  // Look up the handler for the request.
+  const auto i = handlers.find(request_line->target.path);
+  std::string path = request_line->target.path;
+  std::unique_ptr<http_handler> handler =
+      i == handlers.end()
+          ? std::make_unique<error_handler>(error{http_status::not_found})
+          : i->second(request_line->method, std::move(request_line->target));
+  // Read the request headers.
   while (true) {
+    char buffer[1024];
     result<std::string_view> line = co_await read_line(client, buffer);
     if (line.failure()) co_return error{std::move(line).status()};
     if (line->empty()) break;
     result<header_pair> header = parse_header_pair(*line);
     if (header.failure()) co_return error{std::move(header).status()};
-    if (header->name == "Content-Length") {
-      result<int> value = parse_int(header->value);
-      if (value.failure()) co_return error{std::move(value).status()};
-      content_length = *value;
-    } else if (header->name == "Transfer-Encoding") {
-      // TODO: Implement chunked transfer.
-      co_return error{http_status::not_implemented};
+    if (status s = handler->header(header->name, header->value); s.failure()) {
+      handler = std::make_unique<error_handler>(error{std::move(s)});
     }
   }
-  // Read the request payload.
-  if (content_length > buffer.size()) {
-    co_return error{http_status::payload_too_large};
-  }
-  const span<char> request_body = buffer.subspan(0, content_length);
-  if (status s = co_await client.read(request_body); s.failure()) {
-    co_return error{std::move(s)};
-  }
-  co_return http_request{
-      .method = request_line->method,
-      .target = std::move(request_line->target),
-      .payload = std::string_view(request_body.data(), request_body.size()),
-  };
-}
-
-future<status> handle_connection(tcp::stream& client,
-                                 const handler_map& handlers) noexcept {
-  char buffer[65536];
-  result<http_request> request = co_await read_request(client, buffer);
-  if (request.failure()) {
-    co_return co_await send_response(client,
-                                     error{std::move(request).status()});
-  }
-  // Look up the handler for the request.
-  const auto i = handlers.find(request->target.path);
-  if (i == handlers.end()) {
-    co_return co_await send_response(client, error{http_status::not_found});
-  }
-  bool responded = false;
-  request->respond = [&](result<http_response> response) -> future<status> {
-    assert(!responded);
-    responded = true;
-    if (response.success()) {
-      co_return co_await send_response(client, code(response.status()),
-                                       *response);
-    } else {
-      co_return co_await send_response(client,
-                                       error{std::move(response).status()});
-    }
-  };
-  co_await i->second(std::move(*request));
-  assert(responded);
-  co_return status_code::ok;
+  // Process the request payload and respond.
+  co_return co_await handler->run(client);
 }
 
 future<void> spawn_connection(tcp::stream client,
@@ -302,6 +338,13 @@ future<void> accept_loop(tcp::acceptor& server,
 }
 
 }  // namespace
+
+http_handler::~http_handler() noexcept {}
+
+status http_handler::header(case_insensitive_string_view,
+                            std::string_view) noexcept {
+  return status_code::ok;
+}
 
 status make_status(http_status code) noexcept {
   return http_status_manager.make(code);
@@ -351,6 +394,13 @@ status http_server::init(const address& address) noexcept {
 
 void http_server::handle(std::string path, handler h) noexcept {
   handlers_.try_emplace(std::move(path), std::move(h));
+}
+
+void http_server::handle(std::string path,
+                         std::function<future<void>(http_request)> h) noexcept {
+  handlers_.try_emplace(std::move(path), [h](http_method method, uri target) {
+    return std::make_unique<simple_http_handler>(method, std::move(target), h);
+  });
 }
 
 void http_server::start() noexcept {

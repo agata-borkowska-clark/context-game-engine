@@ -1,5 +1,6 @@
 #pragma once
 
+#include "case_insensitive.h"
 #include "net.h"
 #include "result.h"
 #include "status.h"
@@ -51,9 +52,17 @@ struct http_request {
   std::function<future<status>(result<http_response>)> respond;
 };
 
+struct http_handler {
+  virtual ~http_handler() noexcept;
+  virtual status header(case_insensitive_string_view name,
+                        std::string_view value) noexcept;
+  virtual future<status> run(tcp::stream&) noexcept = 0;
+};
+
 class http_server {
  public:
-  using handler = std::function<future<void>(http_request)>;
+  using handler =
+      std::function<std::unique_ptr<http_handler>(http_method, uri)>;
 
   // Equivalent to constructing a http_server and calling init().
   result<http_server> create(io_context&, const address&) noexcept;
@@ -66,6 +75,8 @@ class http_server {
 
   // Add a handler for the given path.
   void handle(std::string path, handler) noexcept;
+  void handle(std::string path,
+              std::function<future<void>(http_request)>) noexcept;
 
   // Handle work for the server.
   void start() noexcept;

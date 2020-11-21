@@ -1,15 +1,40 @@
 #include "http.h"
 
+#include "case_insensitive.h"
 #include "future.h"
 #include "status_managers.h"
 
 #include <charconv>
 #include <regex>
+#include <string_view>
 
 namespace util {
 namespace {
 
 using handler_map = std::map<std::string, http_server::handler>;
+
+constexpr bool is_whitespace(char c) noexcept {
+  return c == ' ' || c == '\t' || c == '\r';
+}
+
+std::string_view trim(std::string_view value) noexcept {
+  const char* i = value.data();
+  const char* j = i + value.size();
+  while (i != j && is_whitespace(*i)) ++i;
+  while (j != i && is_whitespace(j[-1])) --j;
+  return std::string_view(i, j - i);
+}
+
+result<int> parse_int(std::string_view value) {
+  const char* const first = value.data();
+  const char* const last = first + value.size();
+  int result;
+  const auto [ptr, code] = std::from_chars(first, last, result);
+  if (ptr != last || code != std::errc{}) {
+    return error{status(http_status::bad_request)};
+  }
+  return result;
+}
 
 struct http_status_manager_base : status_manager {
   constexpr std::uint64_t domain_id() const noexcept final {
@@ -65,199 +90,6 @@ static constexpr code_manager<http_status_manager_base> http_status_manager;
 static constexpr code_with_message_manager<http_status_manager_base>
     http_status_with_message_manager;
 
-constexpr char canned_response[] =
-    "HTTP/1.1 200 OK\r\n"
-    "Content-Type: text/plain\r\n"
-    "Content-Length: 13\r\n"
-    "\r\n"
-    "Hello, World!";
-
-struct header_data {
-  std::string_view header;
-  span<char> trailing_bytes;
-};
-
-// Asynchronously read a HTTP header. Returns a header_data struct containing
-// two spans: the first span is the header, while the second span is any
-// trailing bytes which were not part of the header. The caller must consider
-// the trailing bytes as a prefix for any subsequent reads.
-future<result<header_data>> read_request_header(
-    tcp::stream& client, span<char> buffer) noexcept {
-  span<char> remaining = buffer;
-  int trailing_newlines = 0;
-  while (!remaining.empty()) {
-    result<span<char>> x = co_await client.read_some(remaining);
-    if (x.failure()) co_return error{std::move(x).status()};
-    if (x->empty()) co_return error{http_status::bad_request};
-    // Scan the new input for two consecutive newline characters. '\r' is
-    // ignored, so the code will accept both '\r\n\r\n' and '\n\n'.
-    for (char& c : *x) {
-      switch (c) {
-        case '\r':
-          break;
-        case '\n':
-          trailing_newlines++;
-          if (trailing_newlines == 2) {
-            char* begin = buffer.data();
-            char* end = &c + 1;
-            std::string_view header(begin, end - begin);
-            span<char> trailing(end, buffer.end() - end);
-            co_return header_data{header, trailing};
-          }
-          break;
-        default:
-          trailing_newlines = 0;
-          break;
-      }
-    }
-    remaining = remaining.subspan(x->size());
-  }
-  co_return error{http_status::request_header_fields_too_large};
-}
-
-struct request_line {
-  http_method method;
-  uri target;
-};
-
-// Parse an HTTP method.
-result<http_method> parse_method(std::string_view method) noexcept {
-  if (method == "GET") return http_method::get;
-  if (method == "POST") return http_method::post;
-  return error{status(http_status::bad_request, "unknown method")};
-}
-
-// Parse an HTTP request line from a string_view.
-result<request_line> parse_request_line(std::string_view line) noexcept {
-  const char* const first = line.data();
-  const char* const last = line.data() + line.size();
-  const char* const method_end = std::find(first, last, ' ');
-  if (method_end == last) {
-    return error{status(http_status::bad_request, "cannot parse request line")};
-  }
-  result<http_method> method =
-      parse_method(std::string_view(first, method_end - first));
-  if (method.failure()) return error{std::move(method).status()};
-  const char* const uri_begin = method_end + 1;
-  const char* const uri_end = std::find(uri_begin, last, ' ');
-  result<uri> uri = parse_uri(std::string_view(uri_begin, uri_end - uri_begin));
-  if (uri.failure()) return error{std::move(uri).status()};
-  return request_line{*method, std::move(*uri)};
-}
-
-struct header {
-  std::string_view name;
-  std::string_view value;
-};
-
-constexpr bool is_whitespace(char c) noexcept {
-  return c == ' ' || c == '\t' || c == '\r';
-}
-
-std::string_view trim(std::string_view value) noexcept {
-  const char* i = value.data();
-  const char* j = i + value.size();
-  while (i != j && is_whitespace(*i)) ++i;
-  while (j != i && is_whitespace(j[-1])) --j;
-  return std::string_view(i, j - i);
-}
-
-// Parse a single HTTP header from a string_view.
-result<header> parse_header(std::string_view line) noexcept {
-  assert(!line.empty());
-  const char* const first = line.data();
-  const char* const last = line.data() + line.size();
-  const char* const header_name_end = std::find(first, last, ':');
-  if (header_name_end == last) {
-    return error{status(http_status::bad_request,
-                        "cannot parse header in " + std::string(line))};
-  }
-  const std::string_view header_name(first, header_name_end - first);
-  if (header_name.empty() || is_whitespace(header_name.front()) ||
-      is_whitespace(header_name.back())) {
-    // Leading whitespace is for obsolete line folding. Trailing whitespace is
-    // forbidden.
-    return error{status(http_status::bad_request, "whitespace in header name")};
-  }
-  const std::string_view header_value =
-      trim(std::string_view(header_name_end + 1, last - header_name_end - 1));
-  return header{header_name, header_value};
-}
-
-struct request_header : request_line {
-  int content_length;
-};
-
-// Parse a full HTTP request header.
-// TODO: Add support for custom headers.
-result<request_header> parse_request_header(std::string_view header) noexcept {
-  assert(!header.empty());
-  assert(header.back() == '\n');
-  const char* const first = header.data();
-  const char* const last = header.data() + header.size();
-  const char* i = std::find(first, last, '\n');
-  auto request_line = parse_request_line(std::string_view(first, i - first));
-  if (request_line.failure()) return error{std::move(request_line).status()};
-  int content_length = 0;
-  while (true) {
-    // Parse a single `Header-Name: value` pair.
-    const char* const line_start = i + 1;
-    const char* const line_end = std::find(line_start, last, '\n');
-    const std::string_view line =
-        trim(std::string_view(line_start, line_end - line_start));
-    if (line.empty()) break;
-    i = line_end;
-    auto header = parse_header(line);
-    if (header.failure()) return error{std::move(header).status()};
-    // Header names should be case insensitive, so make the name lowercase.
-    std::string header_name;
-    for (char c : header->name) header_name.push_back(std::tolower(c));
-    // Handle known headers.
-    if (header_name == "content-length") {
-      const char* const value_begin = header->value.data();
-      const char* const value_end = value_begin + header->value.size();
-      const auto [ptr, code] =
-          std::from_chars(value_begin, value_end, content_length);
-      if (ptr != value_end || code != std::errc{}) {
-        return error{status(http_status::bad_request, "bad content-length")};
-      }
-    } else if (header_name == "transfer-encoding") {
-      // TODO: Implement chunked transfer.
-      return error{http_status::not_implemented};
-    }
-  }
-  return request_header{std::move(*request_line), content_length};
-}
-
-struct request : request_line {
-  span<char> payload;
-};
-
-future<result<http_request>> read_request(tcp::stream& client,
-                                          span<char> buffer) noexcept {
-  result<header_data> parts = co_await read_request_header(client, buffer);
-  if (parts.failure()) co_return error{std::move(parts).status()};
-  result<request_header> header = parse_request_header(parts->header);
-  if (header.failure()) co_return error{std::move(header).status()};
-  if (header->content_length > buffer.size()) {
-    co_return error{http_status::payload_too_large};
-  }
-  // Read the request payload.
-  const int already_read =
-      std::min<int>(parts->trailing_bytes.size(), header->content_length);
-  std::memmove(buffer.data(), parts->trailing_bytes.data(), already_read);
-  const int remaining_bytes = header->content_length - already_read;
-  if (remaining_bytes) {
-    status s =
-        co_await client.read(buffer.subspan(already_read, remaining_bytes));
-    if (s.failure()) co_return error{std::move(s)};
-  }
-  co_return http_request{
-      .method = header->method,
-      .target = std::move(header->target),
-      .payload = std::string_view(buffer.data(), header->content_length)};
-}
-
 http_status code(const status& s) noexcept {
   if (s.domain().domain() == "http") return http_status{s.code()};
   switch (status_code{s.canonical().code()}) {
@@ -276,6 +108,85 @@ http_status code(const status& s) noexcept {
     default:
       return http_status::internal_server_error;
   }
+}
+
+// Read a single line from a stream. This implementation is hopelessly
+// inefficient (it calls read repeatedly for single bytes) but it avoids reading
+// too far in the stream and having to keep track of the trailing bytes.
+// A better implementation would be to add buffering for the stream so that
+// single byte reads do not all result in syscalls.
+future<result<std::string_view>> read_line(tcp::stream& client,
+                                           span<char> buffer) noexcept {
+  int length = 0;
+  for (int i = 0, n = buffer.size(); i < n; i++) {
+    char temp[1];
+    result<span<char>> x = co_await client.read_some(temp);
+    if (x.failure()) co_return error{std::move(x).status()};
+    if (x->empty()) co_return error{http_status::bad_request};
+    char c = (*x)[0];
+    if (c == '\n') co_return std::string_view(buffer.data(), length);
+    if (c != '\r') buffer[length++] = c;
+  }
+  co_return error{http_status::request_header_fields_too_large};
+}
+
+struct request_line {
+  http_method method;
+  uri target;
+};
+
+// Parse an HTTP method.
+result<http_method> parse_method(case_insensitive_string_view method) noexcept {
+  if (method == "GET") return http_method::get;
+  if (method == "POST") return http_method::post;
+  return error{status(http_status::bad_request, "unknown method")};
+}
+
+future<result<request_line>> read_request_line(tcp::stream& client) noexcept {
+  char buffer[1024];
+  result<std::string_view> line = co_await read_line(client, buffer);
+  if (line.failure()) co_return error{std::move(line).status()};
+  const char* const first = line->data();
+  const char* const last = line->data() + line->size();
+  const char* const method_end = std::find(first, last, ' ');
+  if (method_end == last) {
+    co_return error{status(http_status::bad_request, "cannot parse request line")};
+  }
+  result<http_method> method =
+      parse_method(case_insensitive_string_view(first, method_end - first));
+  if (method.failure()) co_return error{std::move(method).status()};
+  const char* const uri_begin = method_end + 1;
+  const char* const uri_end = std::find(uri_begin, last, ' ');
+  result<uri> uri = parse_uri(std::string_view(uri_begin, uri_end - uri_begin));
+  if (uri.failure()) co_return error{std::move(uri).status()};
+  co_return request_line{*method, std::move(*uri)};
+}
+
+struct header_pair {
+  case_insensitive_string_view name;
+  std::string_view value;
+};
+
+result<header_pair> parse_header_pair(std::string_view line) noexcept {
+  const char* const first = line.data();
+  const char* const last = first + line.size();
+  const char* const header_name_end = std::find(first, last, ':');
+  if (header_name_end == last) {
+    return error{
+        status(http_status::bad_request, "bad header: " + std::string(line))};
+  }
+  const case_insensitive_string_view header_name(first,
+                                                 header_name_end - first);
+  if (header_name.empty()) {
+    return error{status(http_status::bad_request, "empty header name")};
+  }
+  if (is_whitespace(header_name.front()) ||
+      is_whitespace(header_name.back())) {
+    return error{status(http_status::bad_request, "whitespace in header name")};
+  }
+  const std::string_view header_value =
+      trim(std::string_view(header_name_end + 1, last - header_name_end - 1));
+  return header_pair{.name = header_name, .value = header_value};
 }
 
 future<status> send_response(tcp::stream& client, http_status s,
@@ -305,10 +216,43 @@ future<status> send_response(tcp::stream& client, const error& e) noexcept {
       http_response{.payload = body, .content_type = "text/plain"});
 }
 
-// TODO: Implement `Connection: keep-alive`, where the same connection can be
-// reused for subsequent requests. This will require smarter handling of the
-// request reading since currently we may read beyond the end of the request
-// payload and then discard those trailing bytes.
+future<result<http_request>> read_request(tcp::stream& client,
+                                          span<char> buffer) noexcept {
+  // Read the request line.
+  result<request_line> request_line = co_await read_request_line(client);
+  if (request_line.failure()) co_return error{std::move(request_line).status()};
+  // Read the header fields.
+  int content_length = 0;
+  while (true) {
+    result<std::string_view> line = co_await read_line(client, buffer);
+    if (line.failure()) co_return error{std::move(line).status()};
+    if (line->empty()) break;
+    result<header_pair> header = parse_header_pair(*line);
+    if (header.failure()) co_return error{std::move(header).status()};
+    if (header->name == "Content-Length") {
+      result<int> value = parse_int(header->value);
+      if (value.failure()) co_return error{std::move(value).status()};
+      content_length = *value;
+    } else if (header->name == "Transfer-Encoding") {
+      // TODO: Implement chunked transfer.
+      co_return error{http_status::not_implemented};
+    }
+  }
+  // Read the request payload.
+  if (content_length > buffer.size()) {
+    co_return error{http_status::payload_too_large};
+  }
+  const span<char> request_body = buffer.subspan(0, content_length);
+  if (status s = co_await client.read(request_body); s.failure()) {
+    co_return error{std::move(s)};
+  }
+  co_return http_request{
+      .method = request_line->method,
+      .target = std::move(request_line->target),
+      .payload = std::string_view(request_body.data(), request_body.size()),
+  };
+}
+
 future<status> handle_connection(tcp::stream& client,
                                  const handler_map& handlers) noexcept {
   char buffer[65536];
@@ -317,8 +261,13 @@ future<status> handle_connection(tcp::stream& client,
     co_return co_await send_response(client,
                                      error{std::move(request).status()});
   }
+  // Look up the handler for the request.
+  const auto i = handlers.find(request->target.path);
+  if (i == handlers.end()) {
+    co_return co_await send_response(client, error{http_status::not_found});
+  }
   bool responded = false;
-  const auto respond = [&](result<http_response> response) -> future<status> {
+  request->respond = [&](result<http_response> response) -> future<status> {
     assert(!responded);
     responded = true;
     if (response.success()) {
@@ -329,24 +278,15 @@ future<status> handle_connection(tcp::stream& client,
                                        error{std::move(response).status()});
     }
   };
-  const auto i = handlers.find(request->target.path);
-  if (i == handlers.end()) {
-    co_return co_await respond(error{http_status::not_found});
-  }
-  request->respond = respond;
   co_await i->second(std::move(*request));
-  if (responded) {
-    co_return status_code::ok;
-  } else {
-    co_return co_await respond(error{http_status::internal_server_error});
-  }
+  assert(responded);
+  co_return status_code::ok;
 }
 
 future<void> spawn_connection(tcp::stream client,
                               const handler_map& handlers) noexcept {
-  if (status s = co_await handle_connection(client, handlers); s.failure()) {
-    std::cerr << s << '\n';
-  }
+  status s = co_await handle_connection(client, handlers);
+  s.success() ? std::cout << s << '\n' : std::cerr << s << '\n';
 }
 
 future<void> accept_loop(tcp::acceptor& server,

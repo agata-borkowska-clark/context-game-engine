@@ -1,6 +1,7 @@
 #include "util/http.h"
 #include "util/io.h"
 #include "util/result.h"
+#include "util/websocket.h"
 
 #include <iostream>
 #include <filesystem>
@@ -25,6 +26,22 @@ auto serve_static(const char* mime_type, const char* file_path) {
   return [mime_type, data](util::http_request request) -> util::future<void> {
     co_await request.respond(util::http_response{data, mime_type});
   };
+}
+
+util::future<util::status> run_websocket(util::websocket& socket) noexcept {
+  while (true) {
+    char buffer[65536];
+    util::result<util::websocket::message> message =
+        co_await socket.receive_message(buffer);
+    if (message.failure()) {
+      co_return util::error{std::move(message).status()};
+    }
+    std::cout << "Received " << message->type << ":\n";
+    std::cout.write(message->payload.data(), message->payload.size()) << '\n';
+    if (util::status s = co_await socket.send_message(*message); s.failure()) {
+      co_return util::error{std::move(s)};
+    }
+  }
 }
 
 }  // namespace
@@ -71,6 +88,7 @@ int main(int argc, char* argv[]) {
     }
   }
   server.handle("/", serve_static("text/html", "static/index.html"));
+  server.handle("/demo", util::handle_websocket(run_websocket));
   server.start();
   if (util::status s = context.run(); s.failure()) {
     std::cerr << s << '\n';

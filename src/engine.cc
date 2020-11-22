@@ -82,9 +82,16 @@ int main(int argc, char* argv[]) {
   }
   for (const auto entry :
        std::filesystem::recursive_directory_iterator("scripts")) {
-    if (entry.path().extension() == ".js") {
-      server.handle(("/"s + entry.path().c_str()).c_str(),
-                    serve_static("text/javascript", entry.path().c_str()));
+    constexpr const char* mime_types[][2] = {
+      {".js", "text/javascript"},
+      {".map", "application/octet-stream"},
+      {".ts", "application/typescript"},
+    };
+    for (const auto [extension, mime_type] : mime_types) {
+      if (entry.path().extension() == extension) {
+        server.handle(("/"s + entry.path().c_str()).c_str(),
+                      serve_static(mime_type, entry.path().c_str()));
+      }
     }
   }
   server.handle("/", serve_static("text/html", "static/index.html"));

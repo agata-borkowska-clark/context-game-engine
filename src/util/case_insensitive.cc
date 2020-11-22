@@ -37,6 +37,16 @@ const char* case_insensitive_char_traits::find(const char* s, std::size_t n,
   return nullptr;
 }
 
+case_insensitive_string operator""_cis(const char* data,
+                                       std::size_t size) noexcept {
+  return case_insensitive_string(data, size);
+}
+
+case_insensitive_string_view operator""_cisv(const char* data,
+                                             std::size_t size) noexcept {
+  return case_insensitive_string_view(data, size);
+}
+
 std::ostream& operator<<(std::ostream& output,
                          const case_insensitive_string& s) noexcept {
   return output.write(s.data(), s.size());

@@ -17,6 +17,9 @@ using case_insensitive_string =
 using case_insensitive_string_view =
     std::basic_string_view<char, case_insensitive_char_traits>;
 
+case_insensitive_string operator""_cis(const char*, std::size_t) noexcept;
+case_insensitive_string_view operator""_cisv(const char*, std::size_t) noexcept;
+
 std::ostream& operator<<(std::ostream&,
                          const case_insensitive_string&) noexcept;
 

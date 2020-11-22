@@ -7,8 +7,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 file(GLOB util_sources src/util/*.cc)
+list(FILTER util_sources EXCLUDE REGEX ".*_test.cc")
 add_library(util ${util_sources})
 target_compile_options(util PRIVATE -fcoroutines)
+
+file(GLOB util_tests src/util/*_test.cc)
+foreach(file ${util_tests})
+  get_filename_component(name ${file} NAME_WE)
+  add_executable(${name} ${file})
+  target_link_libraries(${name} util)
+endforeach()
 
 add_executable(engine src/engine.cc)
 target_link_libraries(engine util)

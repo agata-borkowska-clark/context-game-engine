@@ -53,14 +53,14 @@ struct websocket_handler : http_handler {
     }
     // Compute the acceptance key:
     char buffer[128];
-    span<char> accept_key =
+    const std::string_view accept_key =
         base64_encode(sha1(key + websocket_id).bytes, buffer);
     std::ostringstream response_stream;
     response_stream << "HTTP/1.1 101 Switching Protocols\r\n"
                        "Upgrade: websocket\r\n"
                        "Connection: Upgrade\r\n"
                        "Sec-WebSocket-Accept: "
-                    << std::string_view(accept_key.data(), accept_key.size())
+                    << accept_key
                     << "\r\n"
                        "\r\n";
     std::string response = response_stream.str();

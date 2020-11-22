@@ -12,10 +12,10 @@ int main(int argc, char* argv[]) {
     std::cerr << "Too big.\n";
     return 1;
   }
-  util::span<char> encoded = util::base64_encode(input, buffer);
+  std::string_view encoded = util::base64_encode(input, buffer);
   std::cout.write(encoded.data(), encoded.size());
   std::cout << '\n';
-  util::result<util::span<char>> decoded = util::base64_decode(encoded, buffer);
+  util::result<std::string_view> decoded = util::base64_decode(encoded, buffer);
   if (decoded.failure()) {
     std::cerr << decoded.status() << '\n';
     return 1;

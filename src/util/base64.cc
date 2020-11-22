@@ -25,7 +25,8 @@ constexpr auto tables = [] {
 
 }  // namespace
 
-span<char> base64_encode(span<const char> data, span<char> buffer) noexcept {
+std::string_view base64_encode(std::string_view data,
+                               span<char> buffer) noexcept {
   const int n = data.size();
   // The programmer can always ensure that they provide a big enough buffer
   // here, so this case is not exposed via an error code.
@@ -63,15 +64,15 @@ span<char> base64_encode(span<const char> data, span<char> buffer) noexcept {
     }
   }
   assert(base64_encoded_size(n) == o);
-  return buffer.subspan(0, o);
+  return std::string_view(buffer.data(), o);
 }
 
-result<span<char>> base64_decode(span<const char> data,
-                                 span<char> buffer) noexcept {
+result<std::string_view> base64_decode(std::string_view data,
+                                       span<char> buffer) noexcept {
   const int n = data.size();
   // All base64 strings are a multiple of 4 bytes in length, with padding.
   if (data.size() % 4 != 0) return error{status_code::client_error};
-  if (data.empty()) return buffer.subspan(0, 0);
+  if (data.empty()) return "";
   // The programmer can always ensure that they provide a big enough buffer
   // here, so this case is not exposed via an error code.
   assert(base64_decoded_size(n) <= buffer.size());
@@ -121,7 +122,7 @@ result<span<char>> base64_decode(span<const char> data,
       break;
     }
   }
-  return buffer.subspan(0, o);
+  return std::string_view(buffer.data(), o);
 }
 
 }  // namespace util

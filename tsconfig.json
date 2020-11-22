@@ -10,7 +10,7 @@
         },
         "outDir": "build/scripts",
         "allowSyntheticDefaultImports": true,
-        "sourceRoot": "/"
+        "sourceRoot": "/scripts/"
     },
     "include": ["src/**/*"]
 }

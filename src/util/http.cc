@@ -56,6 +56,8 @@ struct http_status_manager_base : status_manager {
         return "payload_too_large";
       case http_status::request_header_fields_too_large:
         return "request_header_fields_too_large";
+      case http_status::internal_server_error:
+        return "internal_server_error";
       case http_status::not_implemented:
         return "not_implemented";
     }
@@ -278,7 +280,7 @@ struct simple_http_handler : http_handler {
   http_method method;
   uri target;
   std::function<future<void>(http_request)> handler;
-  int content_length = 0;
+  std::size_t content_length = 0;
 };
 
 struct error_handler : http_handler {

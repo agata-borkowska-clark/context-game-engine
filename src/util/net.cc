@@ -38,8 +38,8 @@ status await_op(file_handle epoll, io_state& state,
                 io_state::task resume) noexcept {
   state.*op = std::move(resume);
   epoll_event event;
-  event.events = EPOLLONESHOT | (state.do_in ? EPOLLIN : 0) |
-                 (state.do_out ? EPOLLOUT : 0);
+  event.events = EPOLLONESHOT | (state.do_in ? (int)EPOLLIN : 0) |
+                 (state.do_out ? (int)EPOLLOUT : 0);
   event.data.ptr = &state;
   if (epoll_ctl((int)epoll, EPOLL_CTL_MOD, (int)state.handle, &event) == -1) {
     return std::errc{errno};
@@ -282,7 +282,8 @@ status io_context::run() {
       if ((mask & EPOLLOUT) && state.do_out) {
         schedule(std::exchange(state.do_out, nullptr));
       }
-      mask = (state.do_in ? EPOLLIN : 0) | (state.do_out ? EPOLLOUT : 0);
+      mask =
+          (state.do_in ? (int)EPOLLIN : 0) | (state.do_out ? (int)EPOLLOUT : 0);
       if (mask) {
         // There are other pending I/O handlers. Update the event entry.
         events[i].events = EPOLLONESHOT | mask;

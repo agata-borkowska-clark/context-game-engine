@@ -28,7 +28,6 @@ int main() {
   bool success = true;
   for (const auto [input, expected_output] : test_cases) {
     std::cout << "sha1(" << std::quoted(input) << "): ";
-    char buffer[1024];
     std::ostringstream stream;
     stream << util::sha1(input);
     const std::string output = stream.str();

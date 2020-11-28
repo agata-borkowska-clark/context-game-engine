@@ -86,10 +86,8 @@ struct posix_manager_base : status_manager {
     return "posix";
   }
   std::string_view name(status_payload payload) const noexcept final {
-    // TODO: Add mappings for useful posix codes.
-    switch (std::errc{code(payload)}) {
-      case std::errc{}:
-        return "ok";
+    const std::errc c{code(payload)};
+    switch (c) {
       case std::errc::address_family_not_supported:
         return "address_family_not_supported";
       case std::errc::address_in_use:
@@ -243,16 +241,15 @@ struct posix_manager_base : status_manager {
       case std::errc::wrong_protocol_type:
         return "wrong_protocol_type";
     }
-    return "<unknown>";
+    return c == std::errc{} ? "ok" : "<unknown>";
   }
   bool failure(status_payload payload) const noexcept final {
     return std::errc{code(payload)} != std::errc{};
   }
   status_code canonical(status_payload payload) const noexcept final {
-    switch (std::errc{code(payload)}) {
-      case std::errc{}: return status_code::ok;
-    };
-    return status_code::unknown_error;
+    // TODO: Add mappings for common codes.
+    return std::errc{code(payload)} == std::errc{} ? status_code::ok
+                                                   : status_code::unknown_error;
   }
 };
 

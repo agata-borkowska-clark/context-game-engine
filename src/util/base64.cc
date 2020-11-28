@@ -27,12 +27,12 @@ constexpr auto tables = [] {
 
 std::string_view base64_encode(std::string_view data,
                                span<char> buffer) noexcept {
-  const int n = data.size();
+  const std::size_t n = data.size();
   // The programmer can always ensure that they provide a big enough buffer
   // here, so this case is not exposed via an error code.
   assert(base64_encoded_size(n) <= buffer.size());
-  int i = 0;
-  int o = 0;
+  std::size_t i = 0;
+  std::size_t o = 0;
   while (i + 3 <= n) {
     const unsigned char a = data[i], b = data[i + 1], c = data[i + 2];
     buffer[o + 0] = tables.encode[0x3F & (a >> 2)];
